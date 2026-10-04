@@ -8,6 +8,8 @@ The judge is code-blind. It sees only images (and, for slide decks, the pages an
 
 ## Why it exists
 
+LLM agents are very good at optimizing toward a clear, measurable target. They are bad at guessing what you want. Referee gives them the target: your reference images and mocks, a few weighted criteria, and a score with a list of gaps after every round. The agent chases that score.
+
 An agent that runs for hours on a game or a deck tends to drift. It fixes small things it can measure, writes reports about its own progress and stops adding features. It often rates its own work higher than a person would. Referee reviews the agent's screenshots and remembers earlier rounds:
 
 - The judge compares each round with target images you chose and with the previous round.
