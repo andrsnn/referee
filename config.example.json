@@ -1,0 +1,17 @@
+{
+  "port": 4600,
+  "host": "127.0.0.1",
+  "data_dir": "data",
+  "default_backend": "claude",
+  "fallback": "openai",
+  "claude_bin": "claude",
+  "claude_model": "sonnet",
+  "openai_url": "http://127.0.0.1:8000/v1/chat/completions",
+  "openai_model": "local-vision-model",
+  "openai_api_key": "",
+  "python": "python",
+  "judge_timeout_min": 20,
+  "stuck_after": 5,
+  "supervise_every_min": 10,
+  "allow_agent_commands": false
+}

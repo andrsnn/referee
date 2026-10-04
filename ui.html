@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Art Director</title>
+<style>
+:root { --bg:#0f1316; --panel:#171d21; --line:#2a3338; --text:#dfe6e9; --dim:#8b989e; --accent:#8fc7b0; --bad:#e07a5f; --warn:#e0b45f; --good:#7fc28f; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, sans-serif; }
+header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:2; flex-wrap:wrap; }
+header h1 { font-size:16px; margin:0; color:var(--accent); cursor:pointer; }
+main { padding:16px; max-width:1200px; margin:0 auto; }
+nav.tabs { display:flex; gap:4px; flex-wrap:wrap; margin:8px 0 16px; }
+nav.tabs button { background:var(--panel); color:var(--dim); border:1px solid var(--line); padding:6px 12px; border-radius:6px; cursor:pointer; }
+nav.tabs button.on { color:var(--bg); background:var(--accent); border-color:var(--accent); }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
+input, textarea, select { width:100%; background:#0b0f11; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
+textarea { min-height:80px; resize:vertical; }
+button.act { background:var(--accent); color:#0b0f11; border:0; border-radius:6px; padding:6px 14px; cursor:pointer; font-weight:600; }
+button.sec { background:transparent; color:var(--dim); border:1px solid var(--line); border-radius:6px; padding:4px 10px; cursor:pointer; }
+table { width:100%; border-collapse:collapse; }
+th, td { text-align:left; padding:6px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { color:var(--dim); font-weight:500; font-size:12px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:10px; }
+.grid img { width:100%; border-radius:6px; display:block; cursor:zoom-in; }
+.small { color:var(--dim); font-size:12px; }
+.score { font-variant-numeric:tabular-nums; font-weight:700; }
+.pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; border:1px solid var(--line); }
+.open { color:var(--bad); } .improved { color:var(--warn); } .closed { color:var(--good); }
+.row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.scroll { overflow-x:auto; }
+pre { white-space:pre-wrap; word-break:break-word; background:#0b0f11; padding:10px; border-radius:6px; max-height:500px; overflow:auto; }
+#zoom { position:fixed; inset:0; background:rgba(0,0,0,.92); display:none; align-items:center; justify-content:center; z-index:9; }
+#zoom img { max-width:96vw; max-height:96vh; }
+a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header><h1 onclick="go('')">Art Director</h1><span id="crumb" class="small"></span></header>
+<main id="app">Loading…</main>
+<div id="zoom" onclick="this.style.display='none'"><img></div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+const api = async (path, opt = {}) => {
+  const r = await fetch(path, { ...opt, headers: { 'Content-Type': 'application/json' }, body: opt.body ? JSON.stringify(opt.body) : undefined });
+  const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j;
+};
+const zoom = src => { $('#zoom img').src = src; $('#zoom').style.display = 'flex'; };
+const go = h => { location.hash = h; };
+const scoreColor = v => v >= 7 ? 'var(--good)' : v >= 5 ? 'var(--warn)' : 'var(--bad)';
+window.addEventListener('hashchange', render);
+render();
+
+async function render() {
+  const [pid, tab = 'overview', sub] = location.hash.slice(1).split('/').filter(Boolean);
+  $('#crumb').textContent = pid ? `/ ${pid} / ${tab}${sub ? ' / ' + sub : ''}` : '';
+  try { pid ? await projectView(pid, tab, sub) : await listView(); }
+  catch (e) { $('#app').innerHTML = `<div class="card">Error: ${esc(e.message)}</div>`; }
+}
+
+async function listView() {
+  const ps = await api('/projects');
+  const key = (() => { try { return localStorage.getItem('artdir.sort') || 'last' } catch { return 'last' } })();
+  const ago = t => { if (!t) return 'never'; const m = Math.round((Date.now() - new Date(t)) / 60000); return m < 60 ? m + 'm ago' : m < 2880 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago'; };
+  const sorters = { last: (a, b) => (b.last_eval_at || '').localeCompare(a.last_eval_at || ''), name: (a, b) => a.name.localeCompare(b.name), evals: (a, b) => b.evals - a.evals, score: (a, b) => (b.last_overall ?? -1) - (a.last_overall ?? -1) };
+  ps.sort(sorters[key] || sorters.last);
+  const th = (k, label) => `<th style="cursor:pointer" onclick="try{localStorage.setItem('artdir.sort','${k}')}catch{};render()">${label}${key === k ? ' ▾' : ''}</th>`;
+  const stale = t => t && (Date.now() - new Date(t)) > 2 * 3600e3;
+  $('#app').innerHTML = `
+    <div class="card scroll"><table><tr>${th('name', 'Project')}${th('last', 'Last eval')}${th('score', 'Score')}${th('evals', 'Evals')}<th>Gaps</th><th>Refs</th></tr>
+      ${ps.map(p => `<tr><td><a href="#${p.id}">${esc(p.name)}</a> <span class="small">${p.id}</span></td>
+        <td class="small" style="white-space:nowrap;color:${stale(p.last_eval_at) ? 'var(--warn)' : 'inherit'}" title="${p.last_eval_at ? new Date(p.last_eval_at).toLocaleString() : ''}">${ago(p.last_eval_at)}</td>
+        <td class="score" style="color:${scoreColor(p.last_overall ?? 0)}">${p.last_overall ?? ''}</td><td>${p.evals}</td><td>${p.open_gaps}</td><td>${p.refs}</td></tr>`).join('') || '<tr><td colspan=6 class=small>No projects</td></tr>'}
+    </table><div class="small" style="margin-top:6px">Tap a column header to sort. Last eval turns amber after 2 hours.</div></div>
+    <div class="card"><b>New project</b>
+      <p class="small">Criteria: one per line as <code>key | description | weight</code>. Refs: one local path per line (image, video or folder).</p>
+      <input id="np-name" placeholder="Name"><br><br>
+      <textarea id="np-desc" placeholder="What is being built"></textarea><br><br>
+      <textarea id="np-crit" placeholder="atmosphere | Fog, haze and depth | 1.5"></textarea><br><br>
+      <textarea id="np-refs" placeholder="/path/to/refs"></textarea><br><br>
+      <button class="act" onclick="createProject()">Create</button> <span id="np-msg" class="small"></span>
+    </div>`;
+}
+async function createProject() {
+  $('#np-msg').textContent = 'Creating (videos take a moment)…';
+  try {
+    const criteria = $('#np-crit').value.split('\n').filter(l => l.trim()).map(l => { const [key, description, weight] = l.split('|').map(s => s.trim()); return { key, description: description || key, weight: Number(weight) || 1 }; });
+    const p = await api('/projects', { method: 'POST', body: { name: $('#np-name').value, description: $('#np-desc').value, criteria, refs: $('#np-refs').value.split('\n').map(s => s.trim()).filter(Boolean) } });
+    go(p.id);
+  } catch (e) { $('#np-msg').textContent = e.message; }
+}
+
+async function projectView(pid, tab, sub) {
+  const p = await api(`/projects/${pid}`);
+  const tabs = ['overview', 'chat', 'refs', 'evals', 'gaps'];
+  const head = `<h2 style="margin:0">${esc(p.name)}</h2>
+    <nav class="tabs">${tabs.map(t => `<button class="${t === tab ? 'on' : ''}" onclick="go('${pid}/${t}')">${t} ${t === 'refs' ? p.refs : t === 'evals' ? p.evals : t === 'gaps' ? p.open_gaps + ' open' : ''}</button>`).join('')}</nav>`;
+  let body = '';
+  if (tab === 'overview') body = overview(p);
+  if (tab === 'refs') body = await refsView(p);
+  if (tab === 'evals') body = sub ? await evalDetail(p, sub) : await evalsView(p);
+  if (tab === 'gaps') body = await gapsView(p);
+  if (tab === 'chat') body = await chatView(p, sub);
+  $('#app').innerHTML = head + body;
+}
+
+function overview(p) {
+  return `<div class="card">
+    <label class="small">Name</label><input id="ov-name" value="${esc(p.name)}"><br><br>
+    <label class="small">Description (what is being built)</label><textarea id="ov-desc" style="min-height:120px">${esc(p.description)}</textarea><br><br>
+    <label class="small">Judge backend</label>
+    <select id="ov-backend"><option value="claude" ${p.judge.backend === 'claude' ? 'selected' : ''}>Claude CLI (falls back to OpenAI-compatible)</option><option value="openai" ${p.judge.backend === 'openai' ? 'selected' : ''}>OpenAI-compatible endpoint only</option></select>
+  </div>
+  <div class="card"><b>Criteria</b>
+    <div class="scroll"><table id="crit"><tr><th style="width:18%">Key</th><th>What is scored</th><th style="width:80px">Weight</th><th></th></tr>
+    ${p.criteria.map(c => critRow(c)).join('')}</table></div>
+    <br><button class="sec" onclick="document.querySelector('#crit').insertAdjacentHTML('beforeend', critRow({key:'',description:'',weight:1}))">+ criterion</button>
+  </div>
+  <div class="card"><b>Owner calibration</b> <span class="small">rules the judge follows on every eval. Add them by chatting, then accepting the proposal.</span>
+    <ul>${(p.calibration || []).filter(c => c.active !== false).map(c => `<li><b>${c.id}</b> ${c.criterion ? `<span class="small">[${esc(c.criterion)}]</span> ` : ''}${esc(c.text)}</li>`).join('') || '<li class="small">none yet</li>'}</ul></div>
+  <div class="card"><b>Settings</b><br><textarea id="ov-settings" style="font-family:monospace">${esc(JSON.stringify(p.settings, null, 2))}</textarea></div>
+  <button class="act" onclick="saveOverview('${p.id}')">Save</button> <span id="ov-msg" class="small"></span>`;
+}
+function critRow(c) {
+  return `<tr><td><input class="ck" value="${esc(c.key)}"></td><td><textarea class="cd" style="min-height:40px">${esc(c.description)}</textarea></td><td><input class="cw" type="number" step="0.25" value="${c.weight ?? 1}"></td><td><button class="sec" onclick="this.closest('tr').remove()">✕</button></td></tr>`;
+}
+async function saveOverview(pid) {
+  try {
+    const criteria = [...document.querySelectorAll('#crit tr')].slice(1).map(tr => ({ key: tr.querySelector('.ck').value.trim(), description: tr.querySelector('.cd').value.trim(), weight: Number(tr.querySelector('.cw').value) || 1 })).filter(c => c.key);
+    await api(`/projects/${pid}`, { method: 'PATCH', body: { name: $('#ov-name').value, description: $('#ov-desc').value, backend: $('#ov-backend').value, criteria, settings: JSON.parse($('#ov-settings').value) } });
+    $('#ov-msg').textContent = 'Saved.';
+  } catch (e) { $('#ov-msg').textContent = e.message; }
+}
+
+async function refsView(p) {
+  const refs = await api(`/projects/${p.id}/refs`);
+  const pinned = refs.filter(r => r.pinned).length;
+  const u = r => `/projects/${p.id}/refs/${encodeURIComponent(r.file)}`;
+  return `<div class="card"><b>Add refs</b> <span class="small">local paths, one per line (images, videos, folders)</span>
+      <textarea id="rf-add"></textarea><br><br><button class="act" onclick="addRefs('${p.id}')">Add + caption</button> <span id="rf-msg" class="small"></span></div>
+    <div class="card row"><button class="sec" onclick="captionAll('${p.id}', true)">Auto-caption refs with no caption</button>
+      <span class="small">${refs.filter(r => !r.note).length} uncaptioned · ${pinned} key refs (always sent to the judge; the rest are sampled up to max_refs = ${p.settings.max_refs})</span>
+      <span id="cap-msg" class="small"></span></div>
+    <div class="grid">${refs.map(r => `<div class="card" style="padding:8px${r.pinned ? ';border-color:var(--accent)' : ''}">
+      <img loading="lazy" src="/projects/${p.id}/file/refs/${encodeURIComponent(r.file)}" onclick="zoom(this.src)">
+      <div class="row small" style="justify-content:space-between;margin:4px 0"><span>${esc(r.source)}${r.t != null ? ' @' + r.t + 's' : ''}</span>
+        <label><input type="checkbox" style="width:auto" ${r.pinned ? 'checked' : ''} onchange="api('${u(r)}',{method:'PATCH',body:{pinned:this.checked}}).then(render)"> key ref</label></div>
+      <textarea placeholder="caption: what this ref shows (the judge reads it)" style="min-height:110px;font-size:13px" onchange="api('${u(r)}',{method:'PATCH',body:{note:this.value}}).then(()=>this.nextElementSibling.textContent='saved')">${esc(r.note)}</textarea>
+      <div class="small">${r.note ? (r.caption_auto ? 'auto caption' : 'edited') : ''}</div>
+      <div class="row" style="margin-top:6px"><button class="sec" onclick="this.textContent='captioning…';api('/projects/${p.id}/refs/caption',{method:'POST',body:{files:['${r.file}']}}).then(render)">re-caption</button>
+      <button class="sec" onclick="if(confirm('Remove ref?'))api('${u(r)}',{method:'DELETE'}).then(render)">remove</button></div>
+    </div>`).join('')}</div>`;
+}
+async function captionAll(pid, onlyEmpty) {
+  $('#cap-msg').textContent = 'Captioning in batches of 6 (about 30 s per batch)…';
+  try { const r = await api(`/projects/${pid}/refs/caption`, { method: 'POST', body: { only_empty: onlyEmpty } }); $('#cap-msg').textContent = `Captioned ${r.captioned}.`; render(); }
+  catch (e) { $('#cap-msg').textContent = e.message; }
+}
+async function addRefs(pid) {
+  $('#rf-msg').textContent = 'Adding…';
+  try { const r = await api(`/projects/${pid}/refs`, { method: 'POST', body: { caption: true, paths: $('#rf-add').value.split('\n').map(s => s.trim()).filter(Boolean) } }); $('#rf-msg').textContent = `Added ${r.added}.`; render(); }
+  catch (e) { $('#rf-msg').textContent = e.message; }
+}
+
+async function evalsView(p) {
+  const ev = (await api(`/projects/${p.id}/evals`)).reverse();
+  const keys = p.criteria.map(c => c.key);
+  return `<div class="card scroll"><table><tr><th>#</th><th>Label</th><th>When</th><th>Judge</th><th>Overall</th>${keys.map(k => `<th>${esc(k)}</th>`).join('')}<th>coverage</th><th>Open gaps</th></tr>
+    ${ev.map(e => `<tr><td><a href="#${p.id}/evals/${e.n}">${e.n}</a></td><td>${esc(e.label)}</td><td class="small">${new Date(e.at).toLocaleString()}</td><td class="small">${e.backend}</td>
+      <td class="score" style="color:${scoreColor(e.owner_overall ?? e.overall)}">${e.owner_overall ?? e.overall}${e.owner_overall != null ? '*' : ''}</td>${keys.map(k => `<td class="score" style="color:${scoreColor(e.scores[k])}">${e.scores[k] ?? ''}</td>`).join('')}<td class="score" style="color:${scoreColor(e.coverage ?? 0)}">${e.coverage ?? ''}</td><td>${e.open_gap_count}</td></tr>`).join('') || '<tr><td colspan=9 class=small>No evals yet</td></tr>'}
+  </table></div>`;
+}
+async function evalDetail(p, n) {
+  const e = await api(`/projects/${p.id}/evals/${n}`);
+  const f = x => `/projects/${p.id}/file/evals/${n}/${x}`;
+  return `<div class="card"><div class="row"><b>Eval ${e.n}</b> <span class="small">${esc(e.label)} · ${new Date(e.at).toLocaleString()} · ${e.backend} · ${e.seconds}s</span>
+      <a href="#${p.id}/chat/${e.n}">discuss this eval</a> <a href="${f('prompt.txt')}" target="_blank">prompt</a> <a href="${f('raw.txt')}" target="_blank">raw reply</a></div>
+      ${e.fallback_reason ? `<p class="small" style="color:var(--warn)">Fell back to the OpenAI-compatible backend: ${esc(e.fallback_reason)}</p>` : ''}
+      <p>${esc(e.summary)}</p>
+      <div class="score" style="font-size:22px;color:${scoreColor(e.overall)}">${e.overall}</div></div>
+    <div class="card scroll"><table><tr><th>Criterion</th><th>Score</th><th>Δ</th><th>vs prev</th><th>Reason</th></tr>
+      ${Object.entries(e.scores).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="score" style="color:${scoreColor(v.owner_score ?? v.score)}">${v.owner_score != null ? `${v.owner_score} <span class=small>(judge ${v.score})</span>` : v.score}</td><td>${e.delta ? e.delta[k] : ''}</td><td class="small">${esc(e.vs_previous?.[k] || '')}</td><td>${esc(v.reason)}</td></tr>`).join('')}
+    </table></div>
+    ${e.coverage ? `<div class="card"><b>Coverage</b> <span class="score" style="color:${scoreColor(e.coverage.score)}">${e.coverage.score}</span>${e.coverage.repeats_previous ? ' <span class="pill open">repeats previous shots</span>' : ''}
+      <p>${esc(e.coverage.reason)}</p>${(e.coverage.cannot_judge || []).length ? `<div class="small">Cannot judge: ${e.coverage.cannot_judge.map(esc).join('; ')}</div>` : ''}
+      <b>Capture next round</b><ol>${(e.capture_requests || []).map(r => `<li>${esc(r)}</li>`).join('')}</ol></div>` : ''}
+    ${(e.stuck_gaps || []).length ? `<div class="card" style="border-color:var(--bad)"><b>Stuck gaps</b> <span class="small">open 5+ evals, worked first</span><ul>${e.stuck_gaps.map(g => `<li><b>${g.id}</b> <span class="small">[${esc(g.criterion)}] seen ${g.seen}x</span> ${esc(g.text)}${g.note ? `<div class="small">${esc(g.note)}</div>` : ''}</li>`).join('')}</ul></div>` : ''}
+    ${(e.next_round?.plan || []).length ? `<div class="card" style="border-color:var(--accent)"><b>Next round plan</b>${e.next_round.stalled ? ' <span class="pill open">progress stalled</span>' : ''}<ol>${e.next_round.plan.map(x => `<li><b>${esc(x.feature)}</b> <span class="small">[${esc(x.criterion)}]</span><div class="small">Done when: ${esc(x.done_when)}</div></li>`).join('')}</ol></div>` : ''}
+    <div class="card"><b>Top priorities</b><ol>${e.top_priorities.map(g => `<li><b>${g.id}</b>${g.stuck ? ' <span class="pill open">stuck</span>' : ''} <span class="small">[${esc(g.criterion)}]</span> ${esc(g.text)}</li>`).join('')}</ol></div>
+    <div class="card"><b>New gaps</b><ul>${e.new_gaps.map(g => `<li><b>${g.id}</b> <span class="small">[${esc(g.criterion)}] sev ${g.severity}</span> ${esc(g.text)}</li>`).join('') || '<li class=small>none</li>'}</ul></div>
+    <div class="card"><b>Ledger updates</b><ul>${e.ledger.map(g => `<li><b>${g.id}</b> <span class="pill ${g.status}">${g.status}</span> ${esc(g.text)} <div class="small">${esc(g.note)}</div></li>`).join('') || '<li class=small>none</li>'}</ul></div>
+    <div class="card"><b>Candidates</b><div class="grid">${(e.judged || e.candidates).map((c, i) => `<div><img loading="lazy" src="${f('candidates/' + encodeURIComponent(c.file))}" onclick="zoom(this.src)"><div class="small">${e.judged ? 'C' + (i + 1) + ' · ' : ''}${esc(c.source)}</div></div>`).join('')}</div></div>`;
+}
+
+async function chatView(p, evalN) {
+  const [chat, evs, prop] = await Promise.all([api(`/projects/${p.id}/chat`), api(`/projects/${p.id}/evals`), api(`/projects/${p.id}/chat/proposal`)]);
+  const cur = evalN || (evs.at(-1)?.n ?? 'none');
+  const img = (f, dir) => `<img src="/projects/${p.id}/file/${dir}/${encodeURIComponent(f)}" style="max-width:160px;border-radius:6px;margin:4px 4px 0 0;cursor:zoom-in" onclick="zoom(this.src)">`;
+  const who = { owner: 'You', judge: 'Judge', system: 'System' };
+  const msgs = chat.map(m => `<div class="card" style="${m.role === 'owner' ? 'margin-left:15%;border-color:var(--accent)' : m.role === 'system' ? 'opacity:.85' : 'margin-right:15%'}">
+      <div class="small">${who[m.role] || m.role} · ${new Date(m.at).toLocaleString()}${m.eval ? ' · eval ' + m.eval : m.role === 'owner' ? ' · general' : ''}</div>
+      <div style="white-space:pre-wrap">${esc(m.text)}</div>
+      ${(m.images || []).map(f => img(f, 'chat')).join('')}
+      ${m.proposal ? `<div class="small" style="margin-top:6px"><b>Proposed (revision ${m.proposal.revision}):</b><ul>${m.proposal.lines.map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>` : ''}
+      ${(m.applied || []).length ? `<div class="small" style="margin-top:6px"><b>${m.undone ? 'Undone' : 'Applied'}:</b><ul>${m.applied.map(a => `<li>${esc(a)}</li>`).join('')}</ul>
+        ${m.snapshot && !m.undone ? `<button class="sec" onclick="undoChat('${p.id}','${m.snapshot}')">undo</button>` : ''}</div>` : ''}
+    </div>`).join('');
+  const propCard = prop ? `<div class="card" style="border-color:var(--warn)">
+      <b>Pending proposal</b> <span class="small">revision ${prop.revision}${prop.eval ? ' · eval ' + prop.eval : ' · general'} · nothing is applied until you accept</span>
+      <ul>${prop.lines.map(a => `<li>${esc(a)}</li>`).join('')}</ul>
+      <div class="row"><button class="act" onclick="propAct('${p.id}','accept')">Accept</button>
+        <button class="sec" onclick="propAct('${p.id}','discard')">Discard</button>
+        <span class="small">or keep chatting below to revise it</span></div></div>` : '';
+  return `<div class="row" style="justify-content:flex-end;margin-bottom:8px"><button class="sec" onclick="clearChat('${p.id}')">Clear chat</button></div>
+    <div id="chat-log">${msgs || '<div class="card small">Tell the judge what it got wrong ("characters is a 7 not an 8: the faces still look flat") or give general direction. Attach or paste images to show what you mean. The judge proposes changes, and nothing changes until you accept.</div>'}</div>
+    ${propCard}
+    <div class="card" style="position:sticky;bottom:0">
+      <div class="row" style="margin-bottom:6px"><span class="small">About</span>
+        <select id="ch-eval" style="width:auto"><option value="none" ${cur === 'none' ? 'selected' : ''}>General (no specific eval)</option>${evs.slice().reverse().map(e => `<option value="${e.n}" ${String(e.n) === String(cur) ? 'selected' : ''}>eval ${e.n}${e.label ? ' · ' + esc(e.label) : ''} · ${e.owner_overall ?? e.overall}</option>`).join('')}</select>
+        <input id="ch-files" type="file" accept="image/*,video/*" multiple style="width:auto"></div>
+      <textarea id="ch-text" placeholder="Your feedback for the judge (you can paste images here)" onpaste="chatPaste(event)"></textarea>
+      <div id="ch-pasted" class="small"></div>
+      <div class="row" style="margin-top:6px"><button class="act" onclick="sendChat('${p.id}')">Send</button><span id="ch-msg" class="small"></span></div>
+    </div>`;
+}
+async function propAct(pid, act) {
+  try { await api(`/projects/${pid}/chat/${act}`, { method: 'POST', body: {} }); render(); } catch (e) { alert(e.message); }
+}
+async function clearChat(pid) {
+  if (!confirm('Clear the conversation and any pending proposal? Changes you already accepted stay.')) return;
+  await api(`/projects/${pid}/chat/clear`, { method: 'POST', body: {} }); render();
+}
+let pasted = [];
+function chatPaste(ev) {
+  for (const it of ev.clipboardData?.items || []) if (it.type.startsWith('image/')) {
+    const f = it.getAsFile(); pasted.push(f); $('#ch-pasted').textContent = pasted.length + ' pasted image(s)';
+  }
+}
+const toB64 = f => new Promise(r => { const fr = new FileReader(); fr.onload = () => r({ name: f.name || 'pasted.png', base64: String(fr.result).split(',')[1] }); fr.readAsDataURL(f); });
+async function sendChat(pid) {
+  const text = $('#ch-text').value.trim();
+  const files = [...($('#ch-files').files || []), ...pasted];
+  if (!text && !files.length) return;
+  $('#ch-msg').textContent = 'Judge is thinking (about 30 s)…';
+  try {
+    const images = await Promise.all(files.map(toB64));
+    await api(`/projects/${pid}/chat`, { method: 'POST', body: { text, images: images.length ? images : undefined, eval: $('#ch-eval').value } });
+    pasted = []; render();
+  } catch (e) { $('#ch-msg').textContent = e.message; }
+}
+async function undoChat(pid, snap) {
+  if (!confirm('Undo? This puts criteria, rules, gaps, refs and that eval back to how they were before you accepted.')) return;
+  await api(`/projects/${pid}/chat/undo`, { method: 'POST', body: { snapshot: snap } }); render();
+}
+
+async function gapsView(p) {
+  const gaps = await api(`/projects/${p.id}/gaps`);
+  const keys = [...p.criteria.map(c => c.key), 'general'];
+  const order = { open: 0, improved: 1, closed: 2 };
+  gaps.sort((a, b) => (order[a.status] - order[b.status]) || (b.seen - a.seen));
+  return `<div class="card"><b>Add gap</b><div class="row" style="margin-top:6px">
+      <select id="ng-c" style="width:auto">${keys.map(k => `<option>${k}</option>`).join('')}</select>
+      <input id="ng-t" placeholder="Visible difference from the refs" style="flex:1;min-width:200px"><button class="act" onclick="addGap('${p.id}')">Add</button></div></div>
+    <div class="card scroll"><table><tr><th>ID</th><th>Status</th><th>Criterion</th><th>Gap</th><th>Seen</th><th>Evals</th><th></th></tr>
+    ${gaps.map(g => `<tr><td><b>${g.id}</b>${g.stuck ? ' <span class="pill open">stuck</span>' : ''}</td>
+      <td><select class="${g.status}" onchange="patchGap('${p.id}','${g.id}',{status:this.value})">${['open', 'improved', 'closed'].map(s => `<option ${s === g.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>
+      <td><select onchange="patchGap('${p.id}','${g.id}',{criterion:this.value})">${keys.map(k => `<option ${k === g.criterion ? 'selected' : ''}>${k}</option>`).join('')}</select></td>
+      <td><textarea style="min-height:44px" onchange="patchGap('${p.id}','${g.id}',{text:this.value})">${esc(g.text)}</textarea>
+        <details class="small"><summary>history</summary>${(g.history || []).map(h => `eval ${h.eval}: ${esc(h.status)} — ${esc(h.note)}`).join('<br>')}</details></td>
+      <td>${g.seen}</td><td class="small">${g.first_eval}→${g.last_eval}</td>
+      <td><button class="sec" onclick="if(confirm('Delete gap?'))api('/projects/${p.id}/gaps/${g.id}',{method:'DELETE'}).then(render)">✕</button></td></tr>`).join('') || '<tr><td colspan=7 class=small>No gaps yet</td></tr>'}
+    </table></div>`;
+}
+async function patchGap(pid, id, b) { await api(`/projects/${pid}/gaps/${id}`, { method: 'PATCH', body: b }); }
+async function addGap(pid) { await api(`/projects/${pid}/gaps`, { method: 'POST', body: { criterion: $('#ng-c').value, text: $('#ng-t').value } }); render(); }
+</script>
+</body>
+</html>

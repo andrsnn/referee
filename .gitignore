@@ -1,0 +1,6 @@
+# Project data: refs, evals, gap ledgers, chat. Never commit it.
+data/
+config.json
+node_modules/
+*.log
+*.bak
