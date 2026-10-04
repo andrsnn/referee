@@ -102,6 +102,9 @@ Settings come from environment variables, then `config.json` in the repo folder 
 | `supervise_every_min` | `REFEREE_SUPERVISE_EVERY_MIN` | `10` | How often the supervisor checks agents |
 | `agent_rules` | `REFEREE_AGENT_RULES` | built in | Working rules returned with every eval. A project can override them with `settings.agent_rules` |
 | `allow_agent_commands` | `REFEREE_ALLOW_AGENT_COMMANDS` | `false` | Allows the `command` agent channel, which runs a shell command |
+| `playwright` | `REFEREE_PLAYWRIGHT` | `playwright` | Playwright for playtests: a module name resolved from the Referee folder, or a path to `playwright/index.mjs` |
+| `playtest_browser_args` | `REFEREE_PLAYTEST_BROWSER_ARGS` | `--use-angle=d3d11,--enable-gpu,--ignore-gpu-blocklist` on Windows, `--enable-gpu,--ignore-gpu-blocklist` elsewhere | Comma-separated Chromium flags for playtests |
+| `playtest_load_seconds` | `REFEREE_PLAYTEST_LOAD_SECONDS` | `240` | Time allowed for page and world loading, on top of `max_seconds` |
 
 The Claude backend copies the images into an empty temp folder and runs `claude -p --allowedTools Read` there, so the model can open the images and nothing else. The OpenAI-compatible backend sends the images inline as base64 data URLs.
 
@@ -116,6 +119,7 @@ Per-project settings (edit them in the Overview tab or with `PATCH /projects/:id
 | `compare_previous` | true | Also show up to 4 images from the previous eval for before/after comparison |
 | `nudge_after_min` | 120 | The supervisor nudges an idle agent after this many minutes without an eval |
 | `agent_rules` | unset | Overrides the global agent rules for this project |
+| `playtest` | unset | `{url, script, every_eval, max_seconds}`. See [Independent playtest capture](#independent-playtest-capture) |
 
 ## The judging loop
 
@@ -133,6 +137,35 @@ Each `POST /projects/:id/evals` runs these steps:
 **Brief mode.** A project with no refs is judged against its description and criteria as the stated audience would see it. Use this for slide decks, documents and written answers. Send the PDF and the speaker notes together.
 
 Every eval is saved in `data/projects/<id>/evals/<n>/` with `result.json`, the exact `prompt.txt` and the model's `raw.txt`.
+
+## Independent playtest capture
+
+Agents choose what they film. A coding agent that captures its own screenshots will, without meaning to, show the views that work and skip the ones that don't. The judge then scores a curated highlight reel instead of the game. For browser games, Referee can play the build itself before every eval, so the judge always sees an unedited run from a fresh start.
+
+Set it per project:
+
+```json
+PATCH /projects/my-game
+{"settings": {"playtest": {"url": "http://localhost:5173/", "script": "playtests/my-game.mjs", "every_eval": true, "max_seconds": 75}}}
+```
+
+- `url`: where the game runs.
+- `script`: a small Playwright scenario module, resolved from the Referee folder. Keep it with the judge, not in the repo the agent edits, so the agent cannot change what is tested. Start from [examples/playtests/basic-webgl.mjs](examples/playtests/basic-webgl.mjs).
+- `every_eval`: run before every eval (default). With `false`, it runs only when an eval request sends `"playtest": true`.
+- `max_seconds`: length of the scripted play window, 20-180 (default 75). Loading time is allowed on top.
+
+Before scoring, Referee:
+
+1. Runs the scenario in **headless** Chromium (no window opens) with video recording. The scenario starts a new game and plays a fixed input sequence over the core loop: movement, camera, the main action, reload, interact, the main menus. For a strategy game: select units, move and attack orders, each main panel.
+2. Collects console errors, uncaught page errors, failed network requests, and FPS samples (requestAnimationFrame count over 5 s).
+3. Trims the video to the moment play began and ingests it like any candidate video: one frame sheet plus motion strips. These always go to the judge, labelled `REFEREE PLAYTEST (independent capture)`. The agent's own captures fill the remaining `max_candidates` slots and are optional; an eval with no `paths` judges the playtest alone.
+4. Adds the error counts, the first few messages and the FPS to the prompt as text. The judge is told to trust the playtest when it disagrees with the agent's captures, and that defects visible only in the playtest are real gaps. If the game fails to load or the scenario throws, the failure and its screenshot are reported as a defect.
+
+The reply's `playtest` field carries the same facts (`ok`, `error`, `fps`, error counts), so the agent sees what the judge saw.
+
+Safety: one playtest runs at a time across all projects. Each run has a hard cap (`max_seconds` + load time + 60 s). On timeout Referee kills only the runner process tree it started. Logs, the report and the video are written to `data/playtests/<project>/<time>/`, with one line per run in `data/playtests/playtests.log`. If Playwright is not installed, the playtest is skipped with a logged note and the eval runs as before.
+
+Install Playwright once in the Referee folder: `npm i playwright && npx playwright install chromium`.
 
 ## How agents should call it
 
@@ -226,7 +259,7 @@ All bodies are JSON. Paths in bodies may use forward slashes on Windows. Raw bac
 
 | Method and path | Body | Returns |
 |---|---|---|
-| `POST /projects/:id/evals` | `{paths?, files?, label?, backend?, allow_repeat?, full?, agent?}` | Compact result, or the full result with `full: true` |
+| `POST /projects/:id/evals` | `{paths?, files?, label?, backend?, allow_repeat?, full?, agent?, playtest?}` | Compact result, or the full result with `full: true`. `paths` may be empty when the project has a playtest |
 | `GET /projects/:id/evals` | | Score history |
 | `GET /projects/:id/evals/:n` | | Full result for eval n |
 | `GET /projects/:id/file/<path>` | | Files under the project folder, such as `evals/3/prompt.txt` or `refs/<file>` |
@@ -264,6 +297,7 @@ All bodies are JSON. Paths in bodies may use forward slashes on Windows. Raw bac
 ```
 data/
   nudges.log
+  playtests/          playtests.log, <project>/<time>/ report.json, runner.log, playtest.mp4
   projects/<id>/
     project.json      name, description, criteria, calibration, settings, agent
     refs.json, refs/  reference images and captions
@@ -280,6 +314,7 @@ data/
 - **Cost.** Each eval sends up to `max_refs + max_candidates + 4` images. With Claude this uses your Claude Code plan or API credits.
 - **One eval at a time per project.** Requests queue. A slow model blocks later evals for that project.
 - **Video needs ffmpeg.** PDFs need Python with `pymupdf`.
+- **Playtests cover browser games only** and need Playwright. A scripted run plays badly by design. The judge is told not to mark down aim or strategy, but a script that walks into a wall shows a wall. Headless FPS depends on the judging machine's GPU, so treat it as a trend, not a target. A playtest adds its load time plus `max_seconds` to every eval.
 - **The Claude Code session channel depends on CLI commands** (`claude agents --json`, `claude stop`, `claude --bg --resume`) that older Claude Code versions do not have. Use the tmux or webhook channel if they are missing.
 - **The prompts are written for games and slide decks.** For other visual work, the wording about players, levels and screens may not fit. Edit `buildPrompt` in `server.mjs` to change it.
 

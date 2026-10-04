@@ -10,6 +10,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFileSync, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -197,7 +198,7 @@ function pickRefs(all, max) {
 }
 
 // ---------- prompt ----------
-function buildPrompt(p, gaps, history, refs, cands, prev, texts = []) {
+function buildPrompt(p, gaps, history, refs, cands, prev, texts = [], playtest = null) {
   const brief = refs.length === 0;   // no refs: judge against the brief (decks, docs, written answers)
   const crit = p.criteria.map(c => `- ${c.key} (weight ${c.weight ?? 1}): ${c.description}`).join('\n');
   const open = gaps.filter(g => g.status !== 'closed');
@@ -214,6 +215,19 @@ function buildPrompt(p, gaps, history, refs, cands, prev, texts = []) {
 PROGRESS HAS STALLED: overall has not improved over the last ${recentOverall.length - 1} evals (${recentOverall.join(' -> ')}). Small fixes are not moving the score. next_round.plan must name big, user-visible features that are missing entirely, not polish.
 ` : '';
   const imgList = (arr, tag) => arr.map((x, i) => `${tag}${i + 1}: ${x.source}${x.kind === 'video-motion-strip' ? ` — MOTION STRIP, ${x.ts.length} consecutive frames 0.25 s apart (left to right, top to bottom) from ${x.ts[0]}s: judge animation quality here` : x.ts ? ` — video sheet, ${x.ts.length} frames in time order left to right, top to bottom, at ${x.ts.join('s, ')}s` : x.t != null ? ` @${x.t}s` : ''}${x.pinned ? ' [key ref]' : ''}${x.note ? ` — ${x.note}` : ''}`).join('\n');
+  const fpsTxt = f => f.map(x => `${x.fps} fps${x.label ? ` (${x.label})` : ''}`).join(', ') || 'not measured';
+  const ptBlock = !playtest ? '' : playtest.skipped ? `
+REFEREE PLAYTEST: not run this eval (${playtest.skipped}). Judge from the builder's captures only.
+` : `
+REFEREE PLAYTEST (independent capture): before this eval the judge service itself opened the game in a fresh browser, started a New Game and played a fixed, scripted input sequence. The builder did not choose, film or edit it. Candidates labelled "${PLAYTEST_LABEL}" come from it. All other candidates are the builder's own captures.
+- Script: ${playtest.description || 'core loop inputs'}
+- Result: ${playtest.ok ? 'the game loaded and the whole script ran' : `FAILED: ${playtest.error || 'unknown error'}. A game that fails to load or breaks during a scripted New Game is a severe defect; add it as a gap.`}
+- Frame rate (requestAnimationFrame count over 5 s, headless browser on the judge PC): ${fpsTxt(playtest.fps)}
+- Console errors: ${playtest.console_error_count}${playtest.console_errors.length ? ` (${playtest.console_errors.join(' | ')})` : ''}
+- Uncaught page errors: ${playtest.page_error_count}${playtest.page_errors.length ? ` (${playtest.page_errors.join(' | ')})` : ''}
+- Failed network requests: ${playtest.failed_request_count}${playtest.failed_requests.length ? ` (${playtest.failed_requests.join(' | ')})` : ''}
+RULES FOR THE PLAYTEST: when the playtest and the builder's captures disagree (look, animation, UI, what works), trust the playtest: it shows what a player gets from a fresh start. Defects visible only in the playtest are real gaps. The inputs are scripted, not skilled play, so do not mark down poor aim, routing or strategy. Say in the summary what the playtest showed.
+`;
   const textBlock = texts.length ? `
 CANDIDATE TEXT (speaker notes, script or written material that goes with the candidate):
 ${texts.map(t => `--- ${t.source} ---
@@ -232,7 +246,7 @@ ${imgList(refs, 'R')}`}
 
 CANDIDATE IMAGES (the current build, judge these):
 ${imgList(cands, 'C')}
-${textBlock}${prev.length ? `\nPREVIOUS-EVAL CANDIDATES (the last build you judged, for before/after comparison only):\n${imgList(prev, 'P')}\n` : ''}
+${ptBlock}${textBlock}${prev.length ? `\nPREVIOUS-EVAL CANDIDATES (the last build you judged, for before/after comparison only):\n${imgList(prev, 'P')}\n` : ''}
 CRITERIA (score each 0-10):
 ${crit}
 ${calibBlock}${stallBlock}
@@ -374,6 +388,73 @@ Reply with ONLY JSON: {"R1":"caption", "R2":"caption", ...}`;
   return done;
 }
 
+// ---------- independent playtest ----------
+// Agents choose what they film. Before scoring, Referee plays the build itself: a judge-owned Playwright scenario
+// (see examples/playtests/basic-webgl.mjs) starts a fresh New Game in headless Chromium, runs a fixed input sequence, and records a
+// video, console errors and FPS. Configured per project: settings.playtest = { url, script, every_eval, max_seconds }.
+const PLAYTEST_LABEL = 'REFEREE PLAYTEST (independent capture)';
+const PLAYTEST_DIR = path.join(DATA, 'playtests');
+const PLAYWRIGHT = cfg('playwright', 'REFEREE_PLAYWRIGHT', 'playwright');   // module name or path to playwright's index.mjs
+const PLAYTEST_LOAD_SECONDS = Number(cfg('playtest_load_seconds', 'REFEREE_PLAYTEST_LOAD_SECONDS', 240));   // page and world load allowance on top of max_seconds
+const PLAYTEST_ARGS = String(cfg('playtest_browser_args', 'REFEREE_PLAYTEST_BROWSER_ARGS',
+  process.platform === 'win32' ? '--use-angle=d3d11,--enable-gpu,--ignore-gpu-blocklist' : '--enable-gpu,--ignore-gpu-blocklist'));
+const PLAYWRIGHT_IS_PATH = /[\\/]/.test(PLAYWRIGHT);
+const playwrightFound = () => {
+  if (PLAYWRIGHT_IS_PATH) return fs.existsSync(path.resolve(ROOT, PLAYWRIGHT));
+  try { createRequire(path.join(ROOT, 'playtest-runner.mjs')).resolve(PLAYWRIGHT); return true; } catch { return false; }
+};
+const ptLog = m => { fs.mkdirSync(PLAYTEST_DIR, { recursive: true }); fs.appendFileSync(path.join(PLAYTEST_DIR, 'playtests.log'), new Date().toISOString() + ' ' + m + '\n'); };
+const killTree = pid => {   // the runner's own process group / tree only
+  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+  else try { process.kill(-pid, 'SIGKILL'); } catch { }
+};
+let playtestLock = Promise.resolve();   // one playtest at a time across all projects
+function runPlaytest(p) {
+  const run = playtestLock.catch(() => { }).then(() => playtestOnce(p));
+  playtestLock = run;
+  return run;
+}
+async function playtestOnce(p) {
+  const pt = p.settings?.playtest;
+  const script = path.resolve(ROOT, pt.script);
+  if (!playwrightFound()) { ptLog(`${p.id}: skipped, Playwright not found at ${PLAYWRIGHT}`); return { skipped: 'Playwright not installed' }; }
+  if (!fs.existsSync(script)) { ptLog(`${p.id}: skipped, scenario not found: ${script}`); return { skipped: 'scenario not found' }; }
+  const maxS = Math.max(20, Math.min(180, Number(pt.max_seconds) || 75));
+  const outDir = path.join(PLAYTEST_DIR, p.id, new Date().toISOString().replace(/[:.]/g, '-'));
+  fs.mkdirSync(outDir, { recursive: true });
+  const cap = (maxS + PLAYTEST_LOAD_SECONDS + 60) * 1000;
+  const t0 = Date.now();
+  ptLog(`${p.id}: start ${pt.url} ${path.basename(script)} max ${maxS}s -> ${outDir}`);
+  const code = await new Promise(res => {
+    const logf = fs.openSync(path.join(outDir, 'runner.log'), 'a');
+    const cp = spawn(process.execPath, [path.join(ROOT, 'playtest-runner.mjs'), script, pt.url, outDir, String(maxS)],
+      { cwd: ROOT, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', logf, logf],
+        env: { ...process.env, PLAYTEST_PLAYWRIGHT: PLAYWRIGHT_IS_PATH ? path.resolve(ROOT, PLAYWRIGHT) : PLAYWRIGHT, PLAYTEST_LOAD_SECONDS: String(PLAYTEST_LOAD_SECONDS), PLAYTEST_BROWSER_ARGS: PLAYTEST_ARGS } });
+    // Over the cap: kill this runner and its own browser (the process tree we started), nothing else.
+    const timer = setTimeout(() => { ptLog(`${p.id}: over ${cap / 1000}s, killing runner pid ${cp.pid}`); killTree(cp.pid); }, cap);
+    cp.on('error', e => { clearTimeout(timer); fs.closeSync(logf); res('spawn error: ' + e.message); });
+    cp.on('close', c => { clearTimeout(timer); fs.closeSync(logf); res(c); });
+  });
+  const report = readJson(path.join(outDir, 'report.json'), null) || { ok: false, error: `runner exited ${code} without a report`, console_errors: [], page_errors: [], failed_requests: [], fps: [] };
+  report.dir = outDir; report.seconds = Math.round((Date.now() - t0) / 1000); report.exit = code;
+  if (report.video && !fs.existsSync(report.video)) report.video = null;
+  const failShot = path.join(outDir, 'failure.png');
+  report.failure_shot = fs.existsSync(failShot) ? failShot : null;
+  writeJson(path.join(outDir, 'report.json'), report);
+  ptLog(`${p.id}: done in ${report.seconds}s ok=${report.ok} console_errors=${report.console_errors.length} page_errors=${report.page_errors.length} fps=${report.fps.map(f => f.fps).join('/')}${report.error ? ' error=' + report.error.split('\n')[0].slice(0, 200) : ''}`);
+  return report;
+}
+// Short facts for the prompt and the reply.
+function playtestFacts(r) {
+  if (!r) return null;
+  if (r.skipped) return { skipped: r.skipped };
+  const uniq = a => [...new Set(a || [])];
+  return { ok: !!r.ok, error: r.error ? r.error.split('\n')[0].slice(0, 300) : null, description: r.description || '', fps: r.fps || [],
+    console_error_count: (r.console_errors || []).length, page_error_count: (r.page_errors || []).length, failed_request_count: (r.failed_requests || []).length,
+    console_errors: uniq(r.console_errors).slice(0, 6), page_errors: uniq(r.page_errors).slice(0, 6), failed_requests: uniq(r.failed_requests).slice(0, 4),
+    video: !!r.video, dir: r.dir, seconds: r.seconds };
+}
+
 // ---------- eval ----------
 const queues = new Map();   // one eval at a time per project
 function enqueue(id, fn) {
@@ -389,9 +470,19 @@ async function runEval(p, body) {
   const edir = path.join(pdir(p.id), 'evals', String(n));
   const candDir = path.join(edir, 'candidates');
   const items = expandPaths([...(body.paths || []), ...(body.files || [])]);
-  if (!items.length) throw new Error('no candidate images: pass paths[] or files[]');
-  const added = ingest(items, candDir, { maxW: p.settings.candidate_width, framesPerVideo: p.settings.frames_per_video, note: '' })
-    .filter(x => !x.error);
+  const ptCfg = p.settings?.playtest;
+  const wantPlaytest = !!(ptCfg?.url && ptCfg?.script && (ptCfg.every_eval !== false || body.playtest === true));
+  if (!items.length && !wantPlaytest) throw new Error('no candidate images: pass paths[] or files[]');
+  const added = items.length ? ingest(items, candDir, { maxW: p.settings.candidate_width, framesPerVideo: p.settings.frames_per_video, note: '' })
+    .filter(x => !x.error) : [];
+  // The judge's own playtest: its video (or the failure screenshot) joins the candidates under a fixed label.
+  let playtest = null;
+  if (wantPlaytest) {
+    try { playtest = await runPlaytest(p); } catch (e) { playtest = { ok: false, error: 'playtest crashed: ' + e.message }; ptLog(`${p.id}: ${playtest.error}`); }
+    const media = [playtest.video, !playtest.ok && playtest.failure_shot].filter(Boolean);
+    if (media.length) for (const c of ingest(media.map(f => ({ path: f, note: PLAYTEST_LABEL })), candDir, { maxW: p.settings.candidate_width, framesPerVideo: p.settings.frames_per_video }).filter(x => !x.error))
+      added.push({ ...c, playtest: true, source: c.source.replace(/^playtest\.mp4/, 'referee-playtest.mp4').replace(/^failure\.png/, 'referee-playtest failure screenshot') });
+  }
   if (!added.length) throw new Error('no candidate images could be read');
 
   // Reject a round that mostly re-sends the previous eval's images: the judge can only help on fresh captures.
@@ -401,12 +492,12 @@ async function runEval(p, body) {
   const same = (a, b) => { if (!a || !b || a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++; return d <= 12; };
   for (const c of added) c.phash = hashOf(path.join(candDir, c.file));
   const prevEval = evals.at(-1);
-  const prevHashes = new Set((prevEval?.candidates || []).map(c => {
+  const prevHashes = new Set((prevEval?.candidates || []).filter(c => !c.playtest).map(c => {
     if (c.phash) return c.phash;
     const f = path.join(pdir(p.id), 'evals', String(prevEval.n), 'candidates', c.file);
     return fs.existsSync(f) ? hashOf(f) : null;   // evals from before hashing was added
   }).filter(Boolean));
-  const imgs = added.filter(c => c.kind !== 'text');
+  const imgs = added.filter(c => c.kind !== 'text' && !c.playtest);
   const prevList = [...prevHashes];
   const repeats = imgs.filter(c => prevList.some(h => same(h, c.phash))).length;
   if (prevHashes.size && imgs.length && repeats / imgs.length >= 0.6 && !body.allow_repeat) {
@@ -417,7 +508,10 @@ async function runEval(p, body) {
   const refMeta = readJson(path.join(pdir(p.id), 'refs.json'), []);
   const refs = pickRefs(refMeta, p.settings.max_refs).map(r => ({ ...r, file: path.join(pdir(p.id), 'refs', r.file) }));
   const texts = added.filter(c => c.kind === 'text').map(c => ({ source: c.source, content: fs.readFileSync(path.join(candDir, c.file), 'utf8').slice(0, 40000) }));
-  const cands = sample(videoSheets(added.filter(c => c.kind !== 'text'), candDir), p.settings.max_candidates).map(c => ({ ...c, file: path.join(candDir, c.file) }));
+  // Playtest sheets and motion strips always go in, first; the builder's captures are sampled into the remaining slots.
+  const ptCands = videoSheets(added.filter(c => c.playtest), candDir).map(c => ({ ...c, playtest: true }));
+  const cands = [...ptCands, ...sample(videoSheets(added.filter(c => c.kind !== 'text' && !c.playtest), candDir), Math.max(0, p.settings.max_candidates - ptCands.length))]
+    .map(c => ({ ...c, file: path.join(candDir, c.file) }));
   const last = evals.at(-1);
   const prev = last && p.settings.compare_previous
     ? sample((last.judged || last.candidates || []).filter(c => c.kind !== 'text'), Math.min(4, p.settings.max_candidates)).map(c => ({ ...c, file: path.join(pdir(p.id), 'evals', String(last.n), 'candidates', c.file) }))
@@ -425,7 +519,8 @@ async function runEval(p, body) {
     : [];
 
   const gaps = loadGaps(p.id);
-  const prompt = buildPrompt(p, gaps, evals, refs, cands, prev, texts);
+  const ptFacts = playtestFacts(playtest);
+  const prompt = buildPrompt(p, gaps, evals, refs, cands, prev, texts, ptFacts);
   const images = [...refs.map((r, i) => ({ tag: `R${i + 1}`, file: r.file })), ...cands.map((c, i) => ({ tag: `C${i + 1}`, file: c.file })),
   ...prev.map((c, i) => ({ tag: `P${i + 1}`, file: c.file }))];
   if (body.agent?.type) { const pp = loadProject(p.id); pp.agent = { ...body.agent }; saveProject(pp); }
@@ -503,6 +598,7 @@ async function runEval(p, body) {
     next_round: { stalled: (() => { const r = evals.slice(-3).map(e => e.owner_overall ?? e.overall).concat([overall]); return r.length >= 4 && Math.max(...r.slice(1)) <= r[0] + 0.1; })(), plan: Array.isArray(parsed.next_round?.plan) ? parsed.next_round.plan.filter(x => x?.feature).slice(0, 3) : [] },
     capture_requests: Array.isArray(parsed.capture_requests) ? parsed.capture_requests.filter(Boolean).slice(0, 3) : [],
     summary: parsed.summary || '',
+    playtest: ptFacts,
     candidates: added, judged: cands.map(c => ({ ...c, file: path.basename(c.file) })), refs_used: refs.map(r => r.file && path.basename(r.file)), usage: raw.usage || null,
   };
   writeJson(path.join(edir, 'result.json'), result);
@@ -517,6 +613,7 @@ function compactResult(r) {
     scores: r.scores, delta: r.delta, next_round: r.next_round, top_priorities: r.top_priorities,
     coverage: r.coverage, capture_requests: r.capture_requests, summary: r.summary,
     open_gap_count: r.open_gap_count, merged_count: r.merged_count,
+    ...(r.playtest ? { playtest: { ok: r.playtest.ok, skipped: r.playtest.skipped, error: r.playtest.error, fps: r.playtest.fps, console_error_count: r.playtest.console_error_count, page_error_count: r.playtest.page_error_count, page_errors: r.playtest.page_errors } } : {}),
     note: 'Compact reply: the full gap ledger is tracked by the judge. Add "full": true to the request to get everything.' };
 }
 

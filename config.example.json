@@ -13,5 +13,7 @@
   "judge_timeout_min": 20,
   "stuck_after": 5,
   "supervise_every_min": 10,
-  "allow_agent_commands": false
+  "allow_agent_commands": false,
+  "playwright": "playwright",
+  "playtest_load_seconds": 240
 }
