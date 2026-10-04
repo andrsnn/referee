@@ -98,7 +98,7 @@ Settings come from environment variables, then `config.json` in the repo folder 
 | `openai_api_key` | `REFEREE_OPENAI_API_KEY` | empty | Sent as `Authorization: Bearer` when set |
 | `python` | `REFEREE_PYTHON` | `python` | Python used for PDF rendering |
 | `judge_timeout_min` | `REFEREE_JUDGE_TIMEOUT_MIN` | `20` | Timeout for one judge call |
-| `stuck_after` | `REFEREE_STUCK_AFTER` | `5` | A gap open for this many evals is marked stuck |
+| `stuck_after` | `REFEREE_STUCK_AFTER` | `3` | A gap open for this many evals is marked stuck |
 | `supervise_every_min` | `REFEREE_SUPERVISE_EVERY_MIN` | `10` | How often the supervisor checks agents |
 | `agent_rules` | `REFEREE_AGENT_RULES` | built in | Working rules returned with every eval. A project can override them with `settings.agent_rules` |
 | `allow_agent_commands` | `REFEREE_ALLOW_AGENT_COMMANDS` | `false` | Allows the `command` agent channel, which runs a shell command |
@@ -121,7 +121,7 @@ Per-project settings (edit them in the Overview tab or with `PATCH /projects/:id
 
 Each `POST /projects/:id/evals` runs these steps:
 
-1. **Ingest.** Images become JPEGs. Videos become evenly spaced frames, and the frames of each clip are tiled into one sheet of up to 6 frames, so the judge sees motion over time in a single image. PDFs become one image per page. `.md` and `.txt` files are passed as text (speaker notes, scripts).
+1. **Ingest.** Images become JPEGs. Videos become evenly spaced frames, and the frames of each clip are tiled into one sheet of up to 6 frames, so the judge sees motion over time in a single image. Each video also gets up to two motion strips: 8 consecutive frames 0.25 s apart, taken from parts of the clip where something moves. The judge uses them to grade animation: stiff limbs, sliding feet, a missing aim pose, recoil or reload. PDFs become one image per page. `.md` and `.txt` files are passed as text (speaker notes, scripts).
 2. **Repeat check.** Each image gets a 16x16 perceptual hash. If 60% or more of the images match the previous eval (12 bits or fewer differ), the eval is rejected with a message telling the agent to capture new shots. Send `"allow_repeat": true` to force a re-score.
 3. **Prompt.** The judge gets the refs (R1..), the candidates (C1..), a few images from the previous eval (P1..), the criteria with weights, the owner's calibration rules, the last 5 scores and the open gap ledger.
 4. **Scores.** Each criterion gets 0-10 in half points with a one-sentence reason that names the images. The overall score is the weighted mean.

@@ -38,7 +38,7 @@ const normBackend = b => (b === 'claude' || b === 'openai') ? b : DEFAULT_BACKEN
 const IMG_EXT = new Set(['.png', '.jpg', '.jpeg', '.jfif', '.webp', '.bmp', '.gif']);
 const VID_EXT = new Set(['.mp4', '.webm', '.mov', '.mkv', '.avi']);
 // A gap still open after this many evals is 'stuck': it leads the reply and the priority list.
-const STUCK_AFTER = Number(cfg('stuck_after', 'REFEREE_STUCK_AFTER', 5));
+const STUCK_AFTER = Number(cfg('stuck_after', 'REFEREE_STUCK_AFTER', 3));
 // Returned with every eval so every agent gets the same working rules. Override per project with settings.agent_rules.
 const AGENT_RULES = cfg('agent_rules', 'REFEREE_AGENT_RULES', 'Spend most of your time building visible, user-facing features. Ask for a judgement after a meaningful feature milestone, not after every small change. Capture with one reusable script: a short video of real use plus up to 8 stills of what changed. Do not produce bespoke evidence, audits, proof documents or measurements for the judge. Work next_round.plan first, then the top_priorities in order; skip small polish, the judge tracks the rest. Include the capture_requests (at most 3) in your next capture. Rounds that mostly repeat the previous images are rejected. A gap is fixed only when a later eval marks it closed. Never edit gaps, criteria, refs or calibration yourself.');
 const TXT_EXT = new Set(['.md', '.txt']);   // speaker notes, scripts, written answers
@@ -81,6 +81,28 @@ function videoFrames(src, outDir, base, n, maxW) {
     const t = dur > 0 ? (dur * (i + 0.5)) / n : i;
     const dst = path.join(outDir, `${base}_f${String(i + 1).padStart(2, '0')}.jpg`);
     try { ffmpeg(['-ss', t.toFixed(2), '-i', src, '-frames:v', '1', '-vf', `scale='min(${maxW},iw)':-2`, '-q:v', '3', dst]); out.push({ file: dst, t: +t.toFixed(1) }); } catch { }
+  }
+  return out;
+}
+// Up to two motion strips per video, taken at 30 %, 55 % and 80 % of the clip; a strip whose first and last
+// frames are almost the same size (a static menu or loading screen) is dropped. Each strip gets its own base so
+// videoSheets builds one image per strip.
+function motionFrames(src, outDir, base, maxW, n = 8, step = 0.25) {
+  const dur = videoDuration(src);
+  if (dur < 3) return [];
+  const out = [];
+  let kept = 0;
+  for (const [si, at] of [0.3, 0.55, 0.8].entries()) {
+    if (kept >= 2) break;
+    const t0 = Math.max(0, Math.min(dur - n * step, dur * at)), strip = [];
+    for (let i = 0; i < n; i++) {
+      const t = t0 + i * step, dst = path.join(outDir, `${base}-s${si}_m${String(i + 1).padStart(2, '0')}.jpg`);
+      try { ffmpeg(['-ss', t.toFixed(2), '-i', src, '-frames:v', '1', '-vf', `scale='min(${maxW},iw)':-2`, '-q:v', '3', dst]); strip.push({ file: dst, t: +t.toFixed(2), strip: si }); } catch { }
+    }
+    if (strip.length < 2) continue;
+    const a = fs.statSync(strip[0].file).size, b = fs.statSync(strip.at(-1).file).size;
+    if (Math.abs(a - b) / Math.max(a, b) < 0.003) continue;
+    out.push(...strip); kept++;
   }
   return out;
 }
@@ -139,20 +161,24 @@ function expandPaths(items) {
 // still shows every clip as a sequence over time instead of one frozen frame.
 function videoSheets(list, dir) {
   const out = [], done = new Set();
+  const kinds = { 'video-frame': { max: 6, cols: 3, w: 640, suffix: '_sheet.jpg', kind: 'video-sheet', re: /_f\d+\.jpg$/ },
+    'video-motion': { max: 8, cols: 4, w: 480, suffix: '_motion.jpg', kind: 'video-motion-strip', re: /_m\d+\.jpg$/ } };
   for (const c of list) {
-    if (c.kind !== 'video-frame') { out.push(c); continue; }
-    if (done.has(c.source)) continue;
-    done.add(c.source);
-    const frames = sample(list.filter(x => x.kind === 'video-frame' && x.source === c.source), 6);
-    if (frames.length < 2) { out.push(...frames); continue; }
-    const tmp = path.join(os.tmpdir(), `referee-sheet-${crypto.randomUUID()}`);
+    const k = kinds[c.kind];
+    if (!k) { out.push(c); continue; }
+    const key = c.kind + '|' + c.source;
+    if (done.has(key)) continue;
+    done.add(key);
+    const frames = sample(list.filter(x => x.kind === c.kind && x.source === c.source), k.max);
+    if (frames.length < 2) { if (c.kind === 'video-frame') out.push(...frames); continue; }
+    const tmp = path.join(os.tmpdir(), `vj-sheet-${crypto.randomUUID()}`);
     fs.mkdirSync(tmp);
     try {
       frames.forEach((f, i) => fs.copyFileSync(path.join(dir, f.file), path.join(tmp, `${String(i + 1).padStart(2, '0')}.jpg`)));
-      const file = c.file.replace(/_f\d+\.jpg$/, '') + '_sheet.jpg';
-      ffmpeg(['-i', path.join(tmp, '%02d.jpg'), '-vf', `scale=640:-2,tile=3x${Math.ceil(frames.length / 3)}:padding=4`, '-frames:v', '1', '-q:v', '3', path.join(dir, file)]);
-      out.push({ file, source: c.source, kind: 'video-sheet', ts: frames.map(f => f.t), note: c.note });
-    } catch { out.push(...frames); }
+      const file = c.file.replace(k.re, '') + k.suffix;
+      ffmpeg(['-i', path.join(tmp, '%02d.jpg'), '-vf', `scale=${k.w}:-2,tile=${k.cols}x${Math.ceil(frames.length / k.cols)}:padding=4`, '-frames:v', '1', '-q:v', '3', path.join(dir, file)]);
+      out.push({ file, source: c.source, kind: k.kind, ts: frames.map(f => f.t), note: c.note });
+    } catch { if (c.kind === 'video-frame') out.push(...frames); }
     finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
   return out;
@@ -187,7 +213,7 @@ function buildPrompt(p, gaps, history, refs, cands, prev, texts = []) {
   const stallBlock = stalled ? `
 PROGRESS HAS STALLED: overall has not improved over the last ${recentOverall.length - 1} evals (${recentOverall.join(' -> ')}). Small fixes are not moving the score. next_round.plan must name big, user-visible features that are missing entirely, not polish.
 ` : '';
-  const imgList = (arr, tag) => arr.map((x, i) => `${tag}${i + 1}: ${x.source}${x.ts ? ` — video sheet, ${x.ts.length} frames in time order left to right, top to bottom, at ${x.ts.join('s, ')}s` : x.t != null ? ` @${x.t}s` : ''}${x.pinned ? ' [key ref]' : ''}${x.note ? ` — ${x.note}` : ''}`).join('\n');
+  const imgList = (arr, tag) => arr.map((x, i) => `${tag}${i + 1}: ${x.source}${x.kind === 'video-motion-strip' ? ` — MOTION STRIP, ${x.ts.length} consecutive frames 0.25 s apart (left to right, top to bottom) from ${x.ts[0]}s: judge animation quality here` : x.ts ? ` — video sheet, ${x.ts.length} frames in time order left to right, top to bottom, at ${x.ts.join('s, ')}s` : x.t != null ? ` @${x.t}s` : ''}${x.pinned ? ' [key ref]' : ''}${x.note ? ` — ${x.note}` : ''}`).join('\n');
   const textBlock = texts.length ? `
 CANDIDATE TEXT (speaker notes, script or written material that goes with the candidate):
 ${texts.map(t => `--- ${t.source} ---
@@ -229,7 +255,8 @@ ${history.at(-1)?.capture_requests?.length ? `CAPTURES YOU REQUESTED LAST EVAL (
 5b. Pick the TOP 5 gaps (ledger ids or NEW ids): significant, obvious problems a player or user would notice right away and that need real work to fix (a missing feature, screen, level or system; a look that is clearly wrong across the board). Do not pick small polish, single-pixel artifacts or tweaks. Order them by how much fixing them would raise the scores.
 ${brief
   ? '6. Grade COVERAGE (0-10): can you judge the whole deliverable from what you were given? Penalise missing or unreadable pages, missing speaker notes or script where the brief implies spoken delivery, and anything you had to guess at.\n7. List 1-4 capture_requests: what the builder should include next time so you can judge better (e.g. "include speaker notes for each slide", "send slides at higher resolution").\n\nIGNORE THE NEXT TWO LINES ABOUT VISUAL BUILDS (they apply to visual builds only):\n'
-  : ''}6. Grade COVERAGE (0-10): can you actually judge the whole build from this candidate set? Compare with what the references show. Penalise: the same camera angle, zoom or scene in most images; images nearly identical to the previous eval's (P) images; no sequence or video frames showing things moving and happening over time (characters moving, a fight or interaction starting and ending, menus and UI responding to input); refs' scene types, distances or UI states missing. 9-10 means every important look and moment in the refs has a matching candidate.
+  : ''}5b. ANIMATION: use the MOTION STRIPS (consecutive frames 0.25 s apart) to judge how characters and creatures move: stiff or frozen limbs, feet sliding or not planted, no aim pose, no recoil, reload shown only as text, snapping between poses, no hit reactions. Name what you see in the relevant criterion and add a gap for each clear animation defect. If the strips show the same pose across frames while the character acts, treat animation as broken.
+6. Grade COVERAGE (0-10): can you actually judge the whole build from this candidate set? Compare with what the references show. Penalise: the same camera angle, zoom or scene in most images; images nearly identical to the previous eval's (P) images; no sequence or video frames showing things moving and happening over time (characters moving, a fight or interaction starting and ending, menus and UI responding to input); refs' scene types, distances or UI states missing. 9-10 means every important look and moment in the refs has a matching candidate.
 8. Write next_round.plan: the 1-3 biggest user-visible changes the builder should make next to raise the scores most, judged from what is MISSING or weakest in the images. Prefer whole missing features or screens over polish. Each item: what the player or user should see, which criterion it lifts, and a done_when that you could check from screenshots.
 7. List 1-3 capture_requests, only for features you could not see at all (never ask for proof, logs, measurements or documentation): concrete shots or short videos the builder should capture NEXT round so you can judge what you cannot judge now (e.g. "20 s video of the player meeting an enemy and fighting until one side wins, camera at normal play distance" or "close-up of the inventory screen with several items equipped").
 
