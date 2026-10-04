@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Art Director</title>
+<title>Referee</title>
 <style>
 :root { --bg:#0f1316; --panel:#171d21; --line:#2a3338; --text:#dfe6e9; --dim:#8b989e; --accent:#8fc7b0; --bad:#e07a5f; --warn:#e0b45f; --good:#7fc28f; }
 * { box-sizing:border-box; }
@@ -37,7 +37,7 @@ a { color:var(--accent); }
 </style>
 </head>
 <body>
-<header><h1 onclick="go('')">Art Director</h1><span id="crumb" class="small"></span></header>
+<header><h1 onclick="go('')">⚽ Referee</h1><span id="crumb" class="small"></span></header>
 <main id="app">Loading…</main>
 <div id="zoom" onclick="this.style.display='none'"><img></div>
 <script>
@@ -62,11 +62,11 @@ async function render() {
 
 async function listView() {
   const ps = await api('/projects');
-  const key = (() => { try { return localStorage.getItem('artdir.sort') || 'last' } catch { return 'last' } })();
+  const key = (() => { try { return localStorage.getItem('referee.sort') || 'last' } catch { return 'last' } })();
   const ago = t => { if (!t) return 'never'; const m = Math.round((Date.now() - new Date(t)) / 60000); return m < 60 ? m + 'm ago' : m < 2880 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago'; };
   const sorters = { last: (a, b) => (b.last_eval_at || '').localeCompare(a.last_eval_at || ''), name: (a, b) => a.name.localeCompare(b.name), evals: (a, b) => b.evals - a.evals, score: (a, b) => (b.last_overall ?? -1) - (a.last_overall ?? -1) };
   ps.sort(sorters[key] || sorters.last);
-  const th = (k, label) => `<th style="cursor:pointer" onclick="try{localStorage.setItem('artdir.sort','${k}')}catch{};render()">${label}${key === k ? ' ▾' : ''}</th>`;
+  const th = (k, label) => `<th style="cursor:pointer" onclick="try{localStorage.setItem('referee.sort','${k}')}catch{};render()">${label}${key === k ? ' ▾' : ''}</th>`;
   const stale = t => t && (Date.now() - new Date(t)) > 2 * 3600e3;
   $('#app').innerHTML = `
     <div class="card scroll"><table><tr>${th('name', 'Project')}${th('last', 'Last eval')}${th('score', 'Score')}${th('evals', 'Evals')}<th>Gaps</th><th>Refs</th></tr>

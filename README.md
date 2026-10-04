@@ -1,6 +1,6 @@
-# Art Director
+# ⚽ Referee
 
-Art Director is a small web service that scores screenshots of a build against reference images. Autonomous coding agents call it after each round of work. It tells them what still looks wrong and what to build next.
+Referee is a small web service that scores screenshots of a build against reference images. Autonomous coding agents call it after each round of work. It tells them what still looks wrong and what to build next.
 
 The judge is code-blind. It sees only images (and, for slide decks, the pages and speaker notes). It never sees the source code, logs or the agent's own claims about its progress. The score changes only when the screenshots change.
 
@@ -8,7 +8,7 @@ The judge is code-blind. It sees only images (and, for slide decks, the pages an
 
 ## Why it exists
 
-An agent that runs for hours on a game or a deck tends to drift. It fixes small things it can measure, writes reports about its own progress and stops adding features. It often rates its own work higher than a person would. Art Director reviews the agent's screenshots and remembers earlier rounds:
+An agent that runs for hours on a game or a deck tends to drift. It fixes small things it can measure, writes reports about its own progress and stops adding features. It often rates its own work higher than a person would. Referee reviews the agent's screenshots and remembers earlier rounds:
 
 - The judge compares each round with target images you chose and with the previous round.
 - It keeps a ledger of visible gaps across rounds, so it does not report the same problem in new words every time.
@@ -35,7 +35,7 @@ flowchart LR
   subgraph Agent side
     A[Coding agent<br/>Codex, Claude Code, any agent] -->|captures stills, video, PDF| C[(screenshots)]
   end
-  C -->|POST /projects/:id/evals| S[Art Director server<br/>server.mjs]
+  C -->|POST /projects/:id/evals| S[Referee server<br/>server.mjs]
   S --> I[Ingest<br/>images to JPEG, video to frame sheets,<br/>PDF to pages, perceptual hash]
   I -->|repeat of last round| X[Reject]
   I --> P[Prompt builder<br/>refs + candidates + previous round<br/>+ criteria + calibration + open gaps]
@@ -62,8 +62,8 @@ Requirements:
 - Optional: Python with `pymupdf` (`pip install pymupdf`) to judge PDFs.
 
 ```sh
-git clone https://github.com/<you>/artdirector
-cd artdirector
+git clone https://github.com/<you>/referee
+cd referee
 node server.mjs            # or ./start.sh, or start.cmd on Windows
 # open http://127.0.0.1:4600/
 ```
@@ -80,26 +80,26 @@ node examples/demo/run-demo.mjs round2    # judge round 2 and see the scores mov
 
 ## Configuration
 
-Settings come from environment variables, then `config.json` in the repo folder (or the file named in `ARTDIR_CONFIG`), then the defaults. Copy `config.example.json` to `config.json` to start.
+Settings come from environment variables, then `config.json` in the repo folder (or the file named in `REFEREE_CONFIG`), then the defaults. Copy `config.example.json` to `config.json` to start.
 
 | config.json key | Environment variable | Default | Meaning |
 |---|---|---|---|
-| `port` | `ARTDIR_PORT` | `4600` | HTTP port |
-| `host` | `ARTDIR_HOST` | `127.0.0.1` | Bind address. The API has no auth, so keep it on localhost unless you trust the network |
-| `data_dir` | `ARTDIR_DATA` | `data` | Where projects, refs and evals are stored |
-| `default_backend` | `ARTDIR_BACKEND` | `claude` | Backend for new projects: `claude` or `openai` |
-| `fallback` | `ARTDIR_FALLBACK` | `openai` | When `claude` fails (usage limit, login, error), retry on the OpenAI-compatible backend. `none` turns this off |
-| `claude_bin` | `ARTDIR_CLAUDE_BIN` | `claude` | Path to the Claude Code CLI |
-| `claude_model` | `ARTDIR_CLAUDE_MODEL` | `sonnet` | Model passed to `claude -p --model` |
-| `openai_url` | `ARTDIR_OPENAI_URL` | `http://127.0.0.1:8000/v1/chat/completions` | Any OpenAI-compatible chat completions URL that accepts images (vLLM, llama.cpp server, LM Studio, Ollama, OpenAI) |
-| `openai_model` | `ARTDIR_OPENAI_MODEL` | `local-vision-model` | Model name sent to that endpoint |
-| `openai_api_key` | `ARTDIR_OPENAI_API_KEY` | empty | Sent as `Authorization: Bearer` when set |
-| `python` | `ARTDIR_PYTHON` | `python` | Python used for PDF rendering |
-| `judge_timeout_min` | `ARTDIR_JUDGE_TIMEOUT_MIN` | `20` | Timeout for one judge call |
-| `stuck_after` | `ARTDIR_STUCK_AFTER` | `5` | A gap open for this many evals is marked stuck |
-| `supervise_every_min` | `ARTDIR_SUPERVISE_EVERY_MIN` | `10` | How often the supervisor checks agents |
-| `agent_rules` | `ARTDIR_AGENT_RULES` | built in | Working rules returned with every eval. A project can override them with `settings.agent_rules` |
-| `allow_agent_commands` | `ARTDIR_ALLOW_AGENT_COMMANDS` | `false` | Allows the `command` agent channel, which runs a shell command |
+| `port` | `REFEREE_PORT` | `4600` | HTTP port |
+| `host` | `REFEREE_HOST` | `127.0.0.1` | Bind address. The API has no auth, so keep it on localhost unless you trust the network |
+| `data_dir` | `REFEREE_DATA` | `data` | Where projects, refs and evals are stored |
+| `default_backend` | `REFEREE_BACKEND` | `claude` | Backend for new projects: `claude` or `openai` |
+| `fallback` | `REFEREE_FALLBACK` | `openai` | When `claude` fails (usage limit, login, error), retry on the OpenAI-compatible backend. `none` turns this off |
+| `claude_bin` | `REFEREE_CLAUDE_BIN` | `claude` | Path to the Claude Code CLI |
+| `claude_model` | `REFEREE_CLAUDE_MODEL` | `sonnet` | Model passed to `claude -p --model` |
+| `openai_url` | `REFEREE_OPENAI_URL` | `http://127.0.0.1:8000/v1/chat/completions` | Any OpenAI-compatible chat completions URL that accepts images (vLLM, llama.cpp server, LM Studio, Ollama, OpenAI) |
+| `openai_model` | `REFEREE_OPENAI_MODEL` | `local-vision-model` | Model name sent to that endpoint |
+| `openai_api_key` | `REFEREE_OPENAI_API_KEY` | empty | Sent as `Authorization: Bearer` when set |
+| `python` | `REFEREE_PYTHON` | `python` | Python used for PDF rendering |
+| `judge_timeout_min` | `REFEREE_JUDGE_TIMEOUT_MIN` | `20` | Timeout for one judge call |
+| `stuck_after` | `REFEREE_STUCK_AFTER` | `5` | A gap open for this many evals is marked stuck |
+| `supervise_every_min` | `REFEREE_SUPERVISE_EVERY_MIN` | `10` | How often the supervisor checks agents |
+| `agent_rules` | `REFEREE_AGENT_RULES` | built in | Working rules returned with every eval. A project can override them with `settings.agent_rules` |
+| `allow_agent_commands` | `REFEREE_ALLOW_AGENT_COMMANDS` | `false` | Allows the `command` agent channel, which runs a shell command |
 
 The Claude backend copies the images into an empty temp folder and runs `claude -p --allowedTools Read` there, so the model can open the images and nothing else. The OpenAI-compatible backend sends the images inline as base64 data URLs.
 
@@ -182,7 +182,7 @@ Tell the judge how to reach the agent with `PATCH /projects/:id` (`{"agent": {..
 | tmux | `{"type":"tmux","target":"build:0.0"}` | Pasted into the tmux pane as one bracketed paste, then Enter. Works with Codex, Claude Code or any terminal agent. Add `"wsl": true` to run tmux inside WSL from Windows |
 | Claude Code | `{"type":"claude","session":"<id>","name":"builder"}` | Stops the background session and resumes it with the message (`claude --bg --resume`). Needs a Claude Code version with background sessions |
 | Webhook | `{"type":"webhook","url":"https://...","busy_url":"https://..."}` | POSTs `{project, eval, kind, text}` as JSON. If `busy_url` returns `{"busy": true}`, the nudge waits |
-| Command | `{"type":"command","run":"./notify.sh"}` | Runs a shell command with the message on stdin and in `ARTDIR_MESSAGE`. Off unless `allow_agent_commands` is true |
+| Command | `{"type":"command","run":"./notify.sh"}` | Runs a shell command with the message on stdin and in `REFEREE_MESSAGE`. Off unless `allow_agent_commands` is true |
 
 Every delivery is logged to `data/nudges.log`.
 

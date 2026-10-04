@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const { chromium } = await import(process.env.PLAYWRIGHT ? pathToFileURL(path.join(process.env.PLAYWRIGHT, 'index.mjs')).href : 'playwright');
-const BASE = process.env.ARTDIR_URL || 'http://127.0.0.1:4600';
+const BASE = process.env.REFEREE_URL || 'http://127.0.0.1:4600';
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'screenshots');
 const P = 'fox-run-demo';
 const shots = [

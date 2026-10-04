@@ -1,11 +1,11 @@
 // Create the demo project and (optionally) run an eval against it.
 //   node examples/demo/run-demo.mjs            create the project and add refs
 //   node examples/demo/run-demo.mjs round1     also judge round 1 (needs a working backend)
-// Set ARTDIR_URL if the server is not on http://127.0.0.1:4600.
+// Set REFEREE_URL if the server is not on http://127.0.0.1:4600.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const BASE = process.env.ARTDIR_URL || 'http://127.0.0.1:4600';
+const BASE = process.env.REFEREE_URL || 'http://127.0.0.1:4600';
 const HERE = path.dirname(fileURLToPath(import.meta.url)).replace(/\\/g, '/');
 const call = async (method, url, body) => {
   const r = await fetch(BASE + url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
@@ -26,7 +26,7 @@ if (!project) {
       { key: 'palette', description: 'Colours match the dusk palette of the refs (purples, peach, warm orange)', weight: 1 },
       { key: 'hud', description: 'Heart and coin HUD: shapes, placement, legibility', weight: 0.5 },
     ],
-    backend: process.env.ARTDIR_BACKEND || undefined,
+    backend: process.env.REFEREE_BACKEND || undefined,
     refs: [`${HERE}/refs`],
   });
   console.log(`created ${project.id} with ${project.refs_added} refs`);

@@ -1,4 +1,4 @@
-// Art Director: a code-blind visual judge for autonomous coding agents.
+// Referee: a code-blind visual judge for autonomous coding agents.
 // Projects hold target refs (images/videos), a description, and scoring criteria.
 // Evals send candidate images/videos/PDFs; a vision LLM (Claude via the `claude` CLI, or any
 // OpenAI-compatible endpoint) scores them against the refs and a persistent gap ledger, so feedback
@@ -14,33 +14,33 @@ import { spawn, execFileSync, spawnSync } from 'node:child_process';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 // ---------- config ----------
-// Order of precedence: environment variable > config.json (or the file in ARTDIR_CONFIG) > default.
+// Order of precedence: environment variable > config.json (or the file in REFEREE_CONFIG) > default.
 // See config.example.json and the README for every key.
-const CONFIG_FILE = process.env.ARTDIR_CONFIG || path.join(ROOT, 'config.json');
+const CONFIG_FILE = process.env.REFEREE_CONFIG || path.join(ROOT, 'config.json');
 const FILE_CFG = (() => { try { return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch { return {}; } })();
 const cfg = (key, env, def) => process.env[env] ?? FILE_CFG[key] ?? def;
 
-const DATA = path.resolve(ROOT, cfg('data_dir', 'ARTDIR_DATA', 'data'));
-const PORT = Number(cfg('port', 'ARTDIR_PORT', 4600));
-const HOST = cfg('host', 'ARTDIR_HOST', '127.0.0.1');   // no auth: keep it on localhost unless you trust the network
-const DEFAULT_BACKEND = cfg('default_backend', 'ARTDIR_BACKEND', 'claude');
-const CLAUDE_BIN = cfg('claude_bin', 'ARTDIR_CLAUDE_BIN', 'claude');
-const CLAUDE_MODEL = cfg('claude_model', 'ARTDIR_CLAUDE_MODEL', 'sonnet');
-const OPENAI_URL = cfg('openai_url', 'ARTDIR_OPENAI_URL', 'http://127.0.0.1:8000/v1/chat/completions');
-const OPENAI_MODEL = cfg('openai_model', 'ARTDIR_OPENAI_MODEL', 'local-vision-model');
-const OPENAI_KEY = cfg('openai_api_key', 'ARTDIR_OPENAI_API_KEY', '');
-const PYTHON = cfg('python', 'ARTDIR_PYTHON', 'python');
-const JUDGE_TIMEOUT_MS = Number(cfg('judge_timeout_min', 'ARTDIR_JUDGE_TIMEOUT_MIN', 20)) * 60000;
-const SUPERVISE_EVERY_MS = Number(cfg('supervise_every_min', 'ARTDIR_SUPERVISE_EVERY_MIN', 10)) * 60000;
+const DATA = path.resolve(ROOT, cfg('data_dir', 'REFEREE_DATA', 'data'));
+const PORT = Number(cfg('port', 'REFEREE_PORT', 4600));
+const HOST = cfg('host', 'REFEREE_HOST', '127.0.0.1');   // no auth: keep it on localhost unless you trust the network
+const DEFAULT_BACKEND = cfg('default_backend', 'REFEREE_BACKEND', 'claude');
+const CLAUDE_BIN = cfg('claude_bin', 'REFEREE_CLAUDE_BIN', 'claude');
+const CLAUDE_MODEL = cfg('claude_model', 'REFEREE_CLAUDE_MODEL', 'sonnet');
+const OPENAI_URL = cfg('openai_url', 'REFEREE_OPENAI_URL', 'http://127.0.0.1:8000/v1/chat/completions');
+const OPENAI_MODEL = cfg('openai_model', 'REFEREE_OPENAI_MODEL', 'local-vision-model');
+const OPENAI_KEY = cfg('openai_api_key', 'REFEREE_OPENAI_API_KEY', '');
+const PYTHON = cfg('python', 'REFEREE_PYTHON', 'python');
+const JUDGE_TIMEOUT_MS = Number(cfg('judge_timeout_min', 'REFEREE_JUDGE_TIMEOUT_MIN', 20)) * 60000;
+const SUPERVISE_EVERY_MS = Number(cfg('supervise_every_min', 'REFEREE_SUPERVISE_EVERY_MIN', 10)) * 60000;
 // Backend names: 'claude' (Claude Code CLI, falls back to openai) and 'openai' (OpenAI-compatible endpoint only).
 const normBackend = b => (b === 'claude' || b === 'openai') ? b : DEFAULT_BACKEND;
 
 const IMG_EXT = new Set(['.png', '.jpg', '.jpeg', '.jfif', '.webp', '.bmp', '.gif']);
 const VID_EXT = new Set(['.mp4', '.webm', '.mov', '.mkv', '.avi']);
 // A gap still open after this many evals is 'stuck': it leads the reply and the priority list.
-const STUCK_AFTER = Number(cfg('stuck_after', 'ARTDIR_STUCK_AFTER', 5));
+const STUCK_AFTER = Number(cfg('stuck_after', 'REFEREE_STUCK_AFTER', 5));
 // Returned with every eval so every agent gets the same working rules. Override per project with settings.agent_rules.
-const AGENT_RULES = cfg('agent_rules', 'ARTDIR_AGENT_RULES', 'Spend most of your time building visible, user-facing features. Ask for a judgement after a meaningful feature milestone, not after every small change. Capture with one reusable script: a short video of real use plus up to 8 stills of what changed. Do not produce bespoke evidence, audits, proof documents or measurements for the judge. Work next_round.plan first, then the top_priorities in order; skip small polish, the judge tracks the rest. Include the capture_requests (at most 3) in your next capture. Rounds that mostly repeat the previous images are rejected. A gap is fixed only when a later eval marks it closed. Never edit gaps, criteria, refs or calibration yourself.');
+const AGENT_RULES = cfg('agent_rules', 'REFEREE_AGENT_RULES', 'Spend most of your time building visible, user-facing features. Ask for a judgement after a meaningful feature milestone, not after every small change. Capture with one reusable script: a short video of real use plus up to 8 stills of what changed. Do not produce bespoke evidence, audits, proof documents or measurements for the judge. Work next_round.plan first, then the top_priorities in order; skip small polish, the judge tracks the rest. Include the capture_requests (at most 3) in your next capture. Rounds that mostly repeat the previous images are rejected. A gap is fixed only when a later eval marks it closed. Never edit gaps, criteria, refs or calibration yourself.');
 const TXT_EXT = new Set(['.md', '.txt']);   // speaker notes, scripts, written answers
 const PDF_EXT = new Set(['.pdf']);
 
@@ -91,7 +91,7 @@ function ingest(items, outDir, { maxW, framesPerVideo, note }) {
   for (const it of items) {
     let src = it.path, tmp = null;
     if (!src && it.base64) {
-      tmp = path.join(os.tmpdir(), `artdir-${crypto.randomUUID()}${path.extname(it.name || '.png')}`);
+      tmp = path.join(os.tmpdir(), `referee-${crypto.randomUUID()}${path.extname(it.name || '.png')}`);
       fs.writeFileSync(tmp, Buffer.from(it.base64, 'base64'));
       src = tmp;
     }
@@ -145,7 +145,7 @@ function videoSheets(list, dir) {
     done.add(c.source);
     const frames = sample(list.filter(x => x.kind === 'video-frame' && x.source === c.source), 6);
     if (frames.length < 2) { out.push(...frames); continue; }
-    const tmp = path.join(os.tmpdir(), `artdir-sheet-${crypto.randomUUID()}`);
+    const tmp = path.join(os.tmpdir(), `referee-sheet-${crypto.randomUUID()}`);
     fs.mkdirSync(tmp);
     try {
       frames.forEach((f, i) => fs.copyFileSync(path.join(dir, f.file), path.join(tmp, `${String(i + 1).padStart(2, '0')}.jpg`)));
@@ -268,7 +268,7 @@ async function judgeOpenAI(prompt, images) {
 }
 // Claude through the Claude Code CLI (`claude -p`), run in an empty temp dir that holds only the images.
 async function judgeClaude(prompt, images) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artdir-claude-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'referee-claude-'));
   const lines = [];
   for (const im of images) {
     const f = path.join(dir, `${im.tag}.jpg`);
@@ -302,7 +302,7 @@ function parseJson(text) {
 
 // Run a prompt + images on the wanted backend; claude falls back to openai (credits/limits/errors)
 // unless fallback is set to "none".
-const FALLBACK = cfg('fallback', 'ARTDIR_FALLBACK', 'openai');
+const FALLBACK = cfg('fallback', 'REFEREE_FALLBACK', 'openai');
 async function callModel(wanted, prompt, images) {
   wanted = normBackend(wanted);
   const order = wanted === 'claude' ? (FALLBACK === 'none' ? ['claude'] : ['claude', 'openai']) : ['openai'];
@@ -730,18 +730,18 @@ function undoChat(p, snapId) {
 //   {type:'tmux', target:'build:0.0', wsl?:true}   types the message into a tmux pane (Codex, Claude Code, any TUI agent)
 //   {type:'claude', session:'<id>', name?:'..'}    resumes a Claude Code background session with the message
 //   {type:'webhook', url:'https://..', busy_url?}  POSTs {project, eval, kind, text} as JSON
-//   {type:'command', run:'my-notify.sh'}           runs a shell command; message on stdin and in ARTDIR_MESSAGE
+//   {type:'command', run:'my-notify.sh'}           runs a shell command; message on stdin and in REFEREE_MESSAGE
 //                                                  (only when allow_agent_commands is true in config)
 // Every supervise_every_min: if a project has had no eval for settings.nudge_after_min (default 120) and its agent
 // is idle, it gets the latest plan and top gaps. Right after an eval that shows a stall or a coverage drop, it gets
 // a drift correction. Log: <data>/nudges.log
-const ALLOW_AGENT_COMMANDS = String(cfg('allow_agent_commands', 'ARTDIR_ALLOW_AGENT_COMMANDS', false)) === 'true';
+const ALLOW_AGENT_COMMANDS = String(cfg('allow_agent_commands', 'REFEREE_ALLOW_AGENT_COMMANDS', false)) === 'true';
 const SAFE_ID = /^[\w:.@%+-]+$/;   // tmux targets and session ids go into a shell command line
 const nudgeLog = m => fs.appendFileSync(path.join(DATA, 'nudges.log'), new Date().toISOString() + ' ' + m + '\n');
 function nudgeText(p, last, hours) {
   const plan = (last?.next_round?.plan || []).map((x, i) => `${i + 1}. ${x.feature} (${x.criterion}; done when: ${x.done_when})`).join(' ');
   const top = (last?.top_priorities || []).slice(0, 5).map(g => `${g.id}: ${g.text}`).join(' | ');
-  return `Art Director supervisor: no eval for project ${p.id} in ${hours} h. Get back on the judge loop now: rebuild, capture fresh shots and video, and submit (POST /projects/${p.id}/evals). Work this first. Plan: ${plan || 'see last reply'}. Top gaps: ${top || 'see last reply'}. Do not spend rounds on small polish.`;
+  return `Referee supervisor: no eval for project ${p.id} in ${hours} h. Get back on the judge loop now: rebuild, capture fresh shots and video, and submit (POST /projects/${p.id}/evals). Work this first. Plan: ${plan || 'see last reply'}. Top gaps: ${top || 'see last reply'}. Do not spend rounds on small polish.`;
 }
 async function agentBusy(a) {
   try {
@@ -765,7 +765,7 @@ async function sendNudge(p, a, msg, info, kind = 'nudge') {
     if (!SAFE_ID.test(t || '')) throw new Error('tmux target missing or has unsafe characters');
     // Load the text through stdin into a paste buffer and paste it bracketed, so the TUI receives it as one paste.
     // Some TUIs (e.g. Codex) collapse a long paste into "[Pasted Content]" and need a second Enter to submit it.
-    const script = `tmux load-buffer -b artdir - && tmux paste-buffer -p -d -b artdir -t ${t} && sleep 3 && tmux send-keys -t ${t} Enter && sleep 3 && if tmux capture-pane -p -t ${t} | tail -8 | grep -q "Pasted Content"; then tmux send-keys -t ${t} Enter; fi`;
+    const script = `tmux load-buffer -b referee - && tmux paste-buffer -p -d -b referee -t ${t} && sleep 3 && tmux send-keys -t ${t} Enter && sleep 3 && if tmux capture-pane -p -t ${t} | tail -8 | grep -q "Pasted Content"; then tmux send-keys -t ${t} Enter; fi`;
     const r = a.wsl ? spawnSync('wsl.exe', ['-e', 'bash', '-c', script], { input: one, encoding: 'utf8', timeout: 60000 })
       : spawnSync('bash', ['-c', script], { input: one, encoding: 'utf8', timeout: 60000 });
     if (r.status !== 0) throw new Error('tmux delivery failed: ' + ((r.stderr || '') + (r.error?.message || '')).slice(0, 200));
@@ -776,7 +776,7 @@ async function sendNudge(p, a, msg, info, kind = 'nudge') {
   } else if (a.type === 'command') {
     if (!ALLOW_AGENT_COMMANDS) throw new Error('agent type "command" is disabled: set allow_agent_commands to true in config');
     const r = spawnSync(a.run, { shell: true, input: msg, encoding: 'utf8', timeout: 120000, cwd: a.cwd || undefined,
-      env: { ...process.env, ARTDIR_MESSAGE: msg, ARTDIR_PROJECT: p.id, ARTDIR_KIND: kind } });
+      env: { ...process.env, REFEREE_MESSAGE: msg, REFEREE_PROJECT: p.id, REFEREE_KIND: kind } });
     if (r.status !== 0) throw new Error('command failed: ' + ((r.stderr || '') + (r.error?.message || '')).slice(0, 200));
   } else if (a.type === 'claude') {
     if (!info.sessionId) throw new Error('claude session not found');
@@ -795,7 +795,7 @@ function driftText(p, ev, prevBestCov) {
   const plan = (ev.next_round?.plan || []).map((x, i) => `${i + 1}. ${x.feature} (done when: ${x.done_when})`).join(' ');
   const why = [ev.next_round?.stalled ? 'the overall score has not improved for 3 evals' : '',
     prevBestCov != null && (ev.coverage?.score ?? 10) <= prevBestCov - 2 ? `coverage fell to ${ev.coverage?.score} from ${prevBestCov}: your captures stopped showing parts of the build (${(ev.coverage?.cannot_judge || []).join('; ')})` : ''].filter(Boolean).join(', and ');
-  return `Art Director correction for ${p.id} (eval ${ev.n}): ${why}. Stop the current small fixes. Next round: (a) build this plan first: ${plan}. (b) Capture the WHOLE build every round, not a subset: every screen and mode the judge lists in capture_requests, plus a video of real use: ${(ev.capture_requests || []).join(' | ')}. Then submit.`;
+  return `Referee correction for ${p.id} (eval ${ev.n}): ${why}. Stop the current small fixes. Next round: (a) build this plan first: ${plan}. (b) Capture the WHOLE build every round, not a subset: every screen and mode the judge lists in capture_requests, plus a video of real use: ${(ev.capture_requests || []).join(' | ')}. Then submit.`;
 }
 async function correctDrift(p) {
   const evs = listEvals(p.id); const ev = evs.at(-1); if (!ev || !p.agent?.type || p.agent.corrected_eval === ev.n) return;
@@ -856,7 +856,7 @@ async function route(req, res) {
   const parts = u.pathname.split('/').filter(Boolean);
   const m = req.method;
   if (m === 'GET' && (parts.length === 0 || parts[0] === 'ui')) { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(fs.readFileSync(path.join(ROOT, 'ui.html'))); }
-  if (m === 'GET' && parts[0] === 'api') return send(res, 200, { service: 'artdirector', docs: 'see README.md', port: PORT });
+  if (m === 'GET' && parts[0] === 'api') return send(res, 200, { service: 'referee', docs: 'see README.md', port: PORT });
   if (parts[0] !== 'projects') return send(res, 404, { error: 'not found' });
 
   if (parts.length === 1) {
@@ -977,4 +977,4 @@ function addRefs(p, items) {
 }
 
 http.createServer((req, res) => route(req, res).catch(e => send(res, 500, { error: e.message })))
-  .listen(PORT, HOST, () => console.log(`artdirector on http://${HOST}:${PORT}/  data: ${DATA}`));
+  .listen(PORT, HOST, () => console.log(`referee on http://${HOST}:${PORT}/  data: ${DATA}`));
