@@ -1,24 +1,41 @@
-# ⚽ Referee
+# Visual hill climbing
 
-Referee is a small web service that scores screenshots of a build against reference images. Autonomous coding agents call it after each round of work. It tells them what still looks wrong and what to build next.
-
-The judge is code-blind. It sees only images (and, for slide decks, the pages and speaker notes). It never sees the source code, logs or the agent's own claims about its progress. The score changes only when the screenshots change.
+Building games with visual hill climbing. You give a coding agent a set of mocks of the game you want. After each round of work the agent sends screenshots of the running build, and a vision model scores each one against the mocks and lists what is different. The agent keeps working until the screenshots match the mocks.
 
 ![Eval detail](docs/screenshots/02-eval-detail.png)
 
-## Why it exists
+## What hill climbing is
 
-LLM agents are very good at optimizing toward a clear, measurable target. They are bad at guessing what you want. Referee gives them the target: your reference images and mocks, a few weighted criteria, and a score with a list of gaps after every round. The agent chases that score.
+Hill climbing means taking a step, scoring it, keeping it if the score went up and undoing it if the score went down. You repeat that until you reach the goal. Coding agents are good at this when there is a test that prints a score.
 
-An agent that runs for hours on a game or a deck tends to drift. It fixes small things it can measure, writes reports about its own progress and stops adding features. It often rates its own work higher than a person would. Referee reviews the agent's screenshots and remembers earlier rounds:
+## Why games needed something new
 
-- The judge compares each round with target images you chose and with the previous round.
+A test can tell an agent whether code runs. It can't tell the agent whether a screen looks like the one you asked for, so a game had no score for the agent to climb. Vision models can now look at a mock and a screenshot of the build and say, part by part, what is different and how to fix it. This repo turns that into a score the agent can climb.
+
+## How it works
+
+1. **You set it up.** You choose or generate mocks of the game you want, one for each screen and moment the game must have. You write a short caption for each one. You also write a few criteria with weights.
+2. **The agent builds and captures.** After each round the agent takes screenshots or a short video of the running build and posts them to the server.
+3. **The judge scores.** The judge is Claude through Claude Code or any OpenAI-compatible vision model. It sees only images, never the code, the logs or the agent's reports. It scores each criterion from 0 to 10, compares this round with the mocks and with the previous round, and returns the biggest gaps and a plan for the next round.
+4. **The agent climbs.** If the score went up, it keeps the change and works on the next gap. If the score went down, it undoes the last change and tries a different fix. It repeats until the screenshots match the mocks.
+
+The judge does not test the game or judge taste. You do that by playing the builds yourself.
+
+## Use many different mocks
+
+Make sure you have good diversity in the mocks of your game. That way the model won't overfit. It will generalize and build something that works. Include the menus, the HUD, each level or planet, each kind of fight, and the inventory. An agent given three mocks can pass by building those three screens. An agent given thirty different ones has to build the game.
+
+## What the server does between rounds
+
 - It keeps a ledger of visible gaps across rounds, so it does not report the same problem in new words every time.
-- It returns the 1-3 biggest missing features as a plan, plus the 5 most important gaps.
+- It returns the 1 to 3 biggest missing features as a plan, plus the 5 most important gaps.
 - It refuses rounds that re-send the same screenshots.
+- It marks a round as stalled when the overall score has not gone up over 4 rounds.
 - A supervisor sends the latest plan to the agent when the agent goes quiet or its scores stall.
 
-The owner (you) can talk to the judge in a chat tab. You tell it where its scores are wrong, and it proposes rule changes that you accept or reject.
+You can talk to the judge in a chat tab. You tell it where its scores are wrong, and it proposes rule changes that you accept or reject.
+
+The server is still called Referee in the code, so its settings use the `REFEREE_` prefix.
 
 ## Screenshots
 
@@ -64,8 +81,8 @@ Requirements:
 - Optional: Python with `pymupdf` (`pip install pymupdf`) to judge PDFs.
 
 ```sh
-git clone https://github.com/<you>/referee
-cd referee
+git clone https://github.com/andrsnn/visual-hill-climbing
+cd visual-hill-climbing
 node server.mjs            # or ./start.sh, or start.cmd on Windows
 # open http://127.0.0.1:4600/
 ```
@@ -197,9 +214,10 @@ Loop:
    8 stills of what changed, saved to a new folder each round.
 3. POST the folder: curl -s -X POST http://127.0.0.1:4600/projects/my-game/evals
    -H "Content-Type: application/json" -d '{"paths":["<folder>"],"label":"<what changed>"}'
-4. Work next_round.plan first, then top_priorities in order.
+4. If overall went down, undo your last change and try a different fix.
+5. Work next_round.plan first, then top_priorities in order.
    Include every item in capture_requests in your next capture.
-5. Repeat after each meaningful feature, not after every small fix.
+6. Repeat after each meaningful feature, not after every small fix.
 
 Rules: a gap is fixed only when a later eval marks it closed. Do not edit gaps,
 criteria, refs or calibration. Re-sending the same screenshots is rejected.
