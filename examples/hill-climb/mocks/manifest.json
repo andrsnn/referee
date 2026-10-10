@@ -1,0 +1,5 @@
+{"shots": [
+ {"file": "01-start.jpg", "title": "Start of the level", "shows": "The fox stands at the left edge at dusk. A low sun behind layered purple hills, dark pine trees along the ground, an arc of five gold coins ahead, three heart icons top-left and a coin counter (x12) top-right."},
+ {"file": "02-run.jpg", "title": "Running toward the coins", "shows": "The fox a little further right, running toward the arc of five coins. Same dusk sky, sun, layered hills, pine trees, hearts and coin counter as the start."},
+ {"file": "03-coins.jpg", "title": "Reaching the coins", "shows": "The fox under the arc of five coins, about to collect them. Same dusk sky, sun, layered hills, pine trees, hearts and coin counter."}
+]}

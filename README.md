@@ -14,16 +14,53 @@ A test can tell an agent whether code runs. It can't tell the agent whether a sc
 
 ## How it works
 
-1. **You set it up.** You choose or generate mocks of the game you want, one for each screen and moment the game must have. You write a short caption for each one. You also write a few criteria with weights.
-2. **The agent builds and captures.** After each round the agent takes screenshots or a short video of the running build and posts them to the server.
-3. **The judge scores.** The judge is Claude through Claude Code or any OpenAI-compatible vision model. It sees only images, never the code, the logs or the agent's reports. It scores each criterion from 0 to 10, compares this round with the mocks and with the previous round, and returns the biggest gaps and a plan for the next round.
-4. **The agent climbs.** If the score went up, it keeps the change and works on the next gap. If the score went down, it undoes the last change and tries a different fix. It repeats until the screenshots match the mocks.
+1. **You set it up.** You choose or generate mocks of the game you want, one for each screen and moment the game must have. You write a short description of each one.
+2. **The agent builds and captures.** After each change the agent runs the game and takes a live screenshot for each mock, from the same game state and camera.
+3. **The judge scores.** The judge is Claude through Claude Code or any OpenAI-compatible vision model. It sees only images, never the code, the logs or the agent's reports. It compares each screenshot with its mock, lists what is different and what to change, and scores the match from 0 to 10.
+4. **The agent climbs.** The judge says CONTINUE, UNDO or MATCH. CONTINUE means fix the listed differences and check again. UNDO means the last change made the game look less like the mocks, so the agent goes back to the best build and tries a different fix. MATCH means every screen matches its mock, so the agent stops.
 
 The judge does not test the game or judge taste. You do that by playing the builds yourself.
 
 ## Use many different mocks
 
 Make sure you have good diversity in the mocks of your game. That way the model won't overfit. It will generalize and build something that works. Include the menus, the HUD, each level or planet, each kind of fight, and the inventory. An agent given three mocks can pass by building those three screens. An agent given thirty different ones has to build the game.
+
+## Run the mock check
+
+`parity.mjs` is the simplest way in. It is one file with no npm dependencies. You run it after each round, and it compares the build's screenshots with your mocks.
+
+```sh
+git clone https://github.com/andrsnn/visual-hill-climbing
+cd visual-hill-climbing
+node parity.mjs examples/hill-climb/mocks examples/hill-climb/build-1 --build build-1
+node parity.mjs examples/hill-climb/mocks examples/hill-climb/build-2 --build build-2
+```
+
+- `mocks/` holds one image per screen (`01-start.jpg`, `02-run.jpg` ...) and a `manifest.json` with a title and a short description of what each mock shows.
+- The shots folder holds the build's live screenshot for each mock, with the same file name, taken from the same game state and camera.
+- For each pair, the vision model lists what is different, where, and what to change, and scores the match from 0 to 10. It writes `report.md` and `report.json` to `<shots>/parity/` (or `--out <dir>`).
+- The report ends with one of three verdicts for the agent:
+  - **CONTINUE**: keep building, fix the listed differences, take new screenshots and run the check again.
+  - **UNDO**: a shot scored 2 or more below its best so far, so the last change made the game look less like the mock. Go back to the build that scored best and try a different fix. Each shot's best score, build and screenshot are kept in `best.json` and `best/`.
+  - **MATCH**: every shot scores 8 or more. The agent stops, and you play the build.
+- It uses Claude through Claude Code by default. Add `--backend openai` to use any OpenAI-compatible vision model, set up with the same `REFEREE_OPENAI_*` settings as the server.
+- A pair is only sent to the model when one of its two images changed, and model calls are capped at 90 a day (`REFEREE_PARITY_CAP`). `REFEREE_PARITY_PASS` and `REFEREE_PARITY_DROP` change the pass mark and the undo threshold.
+
+To see UNDO in the example, run `build-1` again after `build-2`. It scores lower, and the check tells the agent to go back to `build-2`.
+
+Lines you can paste into your agent's instructions:
+
+```text
+Mocks of the game are in mocks/. After each change, run the game, take a screenshot
+for each mock from the same game state and camera, save them in shots/ with the same
+file names, and run: node parity.mjs mocks shots --build <commit>
+Do what the verdict says. CONTINUE: fix the listed differences and check again.
+UNDO: go back to the build it names and try a different fix. MATCH: stop.
+```
+
+## The server
+
+The server (`server.mjs`) does the same scoring with more around it: a web UI, a score history per criterion, and a gap ledger. You post screenshots or video to it after each round.
 
 ## What the server does between rounds
 
@@ -47,7 +84,7 @@ The server is still called Referee in the code, so its settings use the `REFEREE
 
 The images in these screenshots come from the demo in `examples/demo/`. A Python script draws them, so they contain no third-party art.
 
-## How it works
+## How the server works
 
 ```mermaid
 flowchart LR

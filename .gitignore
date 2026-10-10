@@ -4,3 +4,4 @@ config.json
 node_modules/
 *.log
 *.bak
+examples/hill-climb/*/parity/
